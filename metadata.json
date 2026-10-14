@@ -1,0 +1,6 @@
+{
+  "name": "RentFlow",
+  "description": "Multi-tenant rental management SaaS for bike and car rental businesses",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

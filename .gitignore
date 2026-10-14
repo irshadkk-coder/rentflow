@@ -1,0 +1,68 @@
+# ==============================================================================
+# RentFlow Git Ignore Configuration
+# ==============================================================================
+
+# Node dependencies & frontend build artifacts
+node_modules/
+build/
+dist/
+dist-ssr/
+*.local
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Local databases, dumps & private data files
+data/
+backups/
+scratch/
+*.dump
+*.sql.gz
+*.sqlite3
+db.sqlite3
+
+# Django media & collected static assets
+backend/staticfiles/
+backend/media/
+staticfiles/
+media/
+
+# Environment files & secrets (DO NOT COMMIT REAL SECRETS)
+.env*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+*.cert
+*.crt
+
+# Test reports & coverage
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+*.log
+
+# Editor & OS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
