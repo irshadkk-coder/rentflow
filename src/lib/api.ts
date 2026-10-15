@@ -15,7 +15,9 @@ import {
   TeamMember,
   TeamInvitation,
   InviteTeamMemberPayload,
-  AcceptInvitationPayload
+  AcceptInvitationPayload,
+  Branch,
+  PublicBranch
 } from '../types.js';
 
 const TOKEN_KEY = 'rentflow_jwt_token';
@@ -740,6 +742,71 @@ export const api = {
     return res.json();
   },
 
+  async publicGetBranches(slug: string): Promise<PublicBranch[]> {
+    const res = await fetch(`/api/public/branches?slug=${encodeURIComponent(slug)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch public branches');
+    }
+    return res.json();
+  },
+
+  // ----------------------------------------------------
+  // BRANCH MANAGEMENT (ADMIN & STAFF)
+  // ----------------------------------------------------
+  async getBranches(activeOnly?: boolean): Promise<Branch[]> {
+    const url = activeOnly ? '/api/branches?active=true' : '/api/branches';
+    const res = await fetchWithAuth(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch branches');
+    }
+    return res.json();
+  },
+
+  async createBranch(payload: Partial<Branch>): Promise<Branch> {
+    const res = await fetchWithAuth('/api/branches', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      let msg = err.error || 'Failed to create branch';
+      if (!err.error && typeof err === 'object') {
+        msg = Object.entries(err).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(' ') : v}`).join('; ');
+      }
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+
+  async updateBranch(id: string, payload: Partial<Branch>): Promise<Branch> {
+    const res = await fetchWithAuth(`/api/branches/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      let msg = err.error || 'Failed to update branch';
+      if (!err.error && typeof err === 'object') {
+        msg = Object.entries(err).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(' ') : v}`).join('; ');
+      }
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+
+  async deactivateBranch(id: string): Promise<{ success: boolean; message: string; branch: Branch }> {
+    const res = await fetchWithAuth(`/api/branches/${id}`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to deactivate branch');
+    }
+    return res.json();
+  },
+
   // ----------------------------------------------------
   // TEAM MANAGEMENT & INVITATIONS
   // ----------------------------------------------------
@@ -857,3 +924,4 @@ export const api = {
     return data;
   }
 };
+

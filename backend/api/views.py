@@ -16,7 +16,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from .models import (
     Tenant, User, Vehicle, Customer, Rental, Invoice,
-    MaintenanceRecord, Enquiry, AuditLog, TeamInvitation
+    MaintenanceRecord, Enquiry, AuditLog, TeamInvitation, Branch
 )
 from .serializers import (
     TenantSerializer, PublicTenantSerializer, UserSerializer,
@@ -27,7 +27,7 @@ from .serializers import (
     VerifyPasswordResetOTPSerializer, ResetPasswordSerializer,
     TeamMemberSerializer, TeamInvitationSerializer,
     CreateTeamInvitationSerializer, AcceptTeamInvitationSerializer,
-    ChangeMemberRoleSerializer
+    ChangeMemberRoleSerializer, BranchSerializer, PublicBranchSerializer
 )
 from .permissions import IsAuthenticated, IsOwner, IsOwnerOrManager, IsStaff
 from .authentication import RentFlowJWTAuthentication
@@ -553,6 +553,26 @@ class PublicBusinessView(APIView):
             return Response({'error': 'Rental business not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
+class PublicBranchesView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_branches'
+
+    def get(self, request):
+        slug = request.query_params.get('slug')
+        if not slug:
+            return Response({'error': 'Business slug query parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tenant = Tenant.objects.get(slug=slug)
+        except Tenant.DoesNotExist:
+            return Response({'error': 'Rental business not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        branches = Branch.objects.filter(tenant=tenant, is_active=True).order_by('name')
+        return Response(PublicBranchSerializer(branches, many=True).data)
+
+
 class PublicVehiclesView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -932,9 +952,192 @@ class TenantDetailView(APIView):
                     settings_dict[field] = data[field]
             tenant.settings = settings_dict
             tenant.save()
+
+            # Keep Branch table in sync if locations provided
+            if 'locations' in data and isinstance(data['locations'], list):
+                from decimal import Decimal
+                existing = {b.name.lower(): b for b in Branch.objects.filter(tenant=tenant)}
+                for loc in data['locations']:
+                    loc_name = str(loc).strip()
+                    if not loc_name:
+                        continue
+                    if loc_name.lower() in existing:
+                        b = existing[loc_name.lower()]
+                        if not b.is_active:
+                            b.is_active = True
+                            b.save()
+                    else:
+                        Branch.objects.create(
+                            tenant=tenant,
+                            name=loc_name,
+                            address=f"{loc_name} Rental Station",
+                            city='San Francisco',
+                            pincode='94105',
+                            latitude=Decimal('37.774900'),
+                            longitude=Decimal('-122.419400'),
+                            phone=tenant.phone or '',
+                            is_active=True
+                        )
+
             return Response(TenantSerializer(tenant).data)
         except Tenant.DoesNotExist:
             return Response({'error': 'Tenant not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# ----------------------------------------------------
+# BRANCHES
+# ----------------------------------------------------
+class BranchListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        tenant = request.user.tenant
+        active_only = request.query_params.get('active')
+        qs = Branch.objects.filter(tenant=tenant)
+        if active_only is not None and str(active_only).lower() in ['true', '1']:
+            qs = qs.filter(is_active=True)
+        return Response(BranchSerializer(qs, many=True).data)
+
+    def post(self, request):
+        if request.user.role != 'owner':
+            return Response(
+                {'error': 'Forbidden: Action requires role owner.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        tenant = request.user.tenant
+        serializer = BranchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        name = serializer.validated_data['name'].strip()
+        if Branch.objects.filter(tenant=tenant, name__iexact=name).exists():
+            return Response(
+                {'error': f"A branch with the name '{name}' already exists for your business."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        branch = serializer.save(tenant=tenant)
+
+        # Sync active branch names with tenant settings locations
+        active_branches = list(Branch.objects.filter(tenant=tenant, is_active=True).values_list('name', flat=True))
+        settings_dict = tenant.settings or {}
+        settings_dict['locations'] = active_branches
+        tenant.settings = settings_dict
+        tenant.save()
+
+        AuditLog.objects.create(
+            tenant=tenant,
+            user_id=request.user.id,
+            user_name=request.user.name,
+            user_role=request.user.role,
+            action='CREATE_BRANCH',
+            entity_type='Branch',
+            entity_id=branch.id,
+            details=f"Created branch '{branch.name}' in {branch.city} ({branch.latitude}, {branch.longitude})"
+        )
+
+        return Response(BranchSerializer(branch).data, status=status.HTTP_201_CREATED)
+
+
+class BranchDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            branch = Branch.objects.get(id=pk, tenant_id=request.user.tenant_id)
+            return Response(BranchSerializer(branch).data)
+        except Branch.DoesNotExist:
+            return Response({'error': 'Branch not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
+
+    def patch(self, request, pk):
+        if request.user.role != 'owner':
+            return Response(
+                {'error': 'Forbidden: Action requires role owner.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            branch = Branch.objects.get(id=pk, tenant_id=request.user.tenant_id)
+        except Branch.DoesNotExist:
+            return Response({'error': 'Branch not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = BranchSerializer(branch, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        new_name = serializer.validated_data.get('name')
+        if new_name and new_name.strip().lower() != branch.name.lower():
+            if Branch.objects.filter(tenant=request.user.tenant, name__iexact=new_name.strip()).exclude(id=pk).exists():
+                return Response(
+                    {'error': f"A branch with the name '{new_name}' already exists for your business."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        branch = serializer.save()
+
+        # Sync active branches with tenant settings locations
+        active_branches = list(Branch.objects.filter(tenant=request.user.tenant, is_active=True).values_list('name', flat=True))
+        settings_dict = request.user.tenant.settings or {}
+        settings_dict['locations'] = active_branches
+        request.user.tenant.settings = settings_dict
+        request.user.tenant.save()
+
+        AuditLog.objects.create(
+            tenant=request.user.tenant,
+            user_id=request.user.id,
+            user_name=request.user.name,
+            user_role=request.user.role,
+            action='UPDATE_BRANCH',
+            entity_type='Branch',
+            entity_id=branch.id,
+            details=f"Updated branch '{branch.name}' (active={branch.is_active})"
+        )
+
+        return Response(BranchSerializer(branch).data)
+
+    def delete(self, request, pk):
+        if request.user.role != 'owner':
+            return Response(
+                {'error': 'Forbidden: Action requires role owner.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            branch = Branch.objects.get(id=pk, tenant_id=request.user.tenant_id)
+        except Branch.DoesNotExist:
+            return Response({'error': 'Branch not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Deactivate branch
+        branch.is_active = False
+        branch.save()
+
+        # Sync active branches with tenant settings locations
+        active_branches = list(Branch.objects.filter(tenant=request.user.tenant, is_active=True).values_list('name', flat=True))
+        settings_dict = request.user.tenant.settings or {}
+        settings_dict['locations'] = active_branches
+        request.user.tenant.settings = settings_dict
+        request.user.tenant.save()
+
+        AuditLog.objects.create(
+            tenant=request.user.tenant,
+            user_id=request.user.id,
+            user_name=request.user.name,
+            user_role=request.user.role,
+            action='DEACTIVATE_BRANCH',
+            entity_type='Branch',
+            entity_id=branch.id,
+            details=f"Deactivated branch '{branch.name}'"
+        )
+
+        return Response({
+            'success': True,
+            'message': f"Branch '{branch.name}' has been deactivated.",
+            'branch': BranchSerializer(branch).data
+        })
 
 
 # ----------------------------------------------------

@@ -15,12 +15,15 @@ import {
   AlertCircle,
   CreditCard,
   UserCheck,
-  Fuel
+  Fuel,
+  Compass,
+  Navigation
 } from 'lucide-react';
-import { Tenant, PublicVehicle, PricingQuote } from '../types.js';
+import { Tenant, PublicVehicle, PricingQuote, PublicBranch } from '../types.js';
 import { api } from '../lib/api.js';
 import { formatCurrency } from '../lib/utils.js';
 import { BotVerification } from './BotVerification.js';
+import { NearbyBranchesModal } from './NearbyBranchesModal.js';
 
 interface PublicBookingViewProps {
   currentTenant: Tenant;
@@ -50,8 +53,34 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     return d.toISOString().slice(0, 16);
   });
   const [selectedLocation, setSelectedLocation] = useState<string>(currentTenant.locations[0] || '');
+  const [publicBranches, setPublicBranches] = useState<PublicBranch[]>([]);
+  const [isNearbyModalOpen, setIsNearbyModalOpen] = useState<boolean>(false);
   const [insuranceTier, setInsuranceTier] = useState<'none' | 'basic' | 'premium'>('basic');
   const [selectedAddOns, setSelectedAddOns] = useState<string[]>([]);
+
+  // Fetch active public branches for nearby geolocation
+  useEffect(() => {
+    let isMounted = true;
+    api.publicGetBranches(currentTenant.slug)
+      .then((branches) => {
+        if (isMounted) {
+          setPublicBranches(branches);
+          if (branches.length > 0 && !selectedLocation) {
+            setSelectedLocation(branches[0].name);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load public branches:', err);
+      });
+    return () => { isMounted = false; };
+  }, [currentTenant.slug]);
+
+  const locationOptions = React.useMemo(() => {
+    const fromBranches = publicBranches.map((b) => b.name);
+    const combined = Array.from(new Set([...fromBranches, ...currentTenant.locations]));
+    return combined.length > 0 ? combined : ['Downtown Harbor Hub'];
+  }, [publicBranches, currentTenant.locations]);
 
   const PUBLIC_ADD_ONS = [
     { id: 'helmet', name: 'Safety Helmet', price: '₹5/day', desc: 'DOT/ECE certified safety helmet' },
@@ -349,26 +378,48 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
             {/* Rental Location */}
             <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Rental Location (Pickup & Return)</span>
-              </label>
-              <select
-                id="storefront-rental-location"
-                value={selectedLocation}
-                onChange={(e) => {
-                  setSelectedLocation(e.target.value);
-                  setSelectedVehicle(null);
-                }}
-                className="w-full px-3 py-2.5 bg-slate-50 hover:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 transition-all focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
-              >
-                <option value="">Select a rental location...</option>
-                {currentTenant.locations.map((loc) => (
-                  <option key={loc} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Rental Location (Pickup & Return)</span>
+                </label>
+                <button
+                  id="find-nearby-branches-btn"
+                  type="button"
+                  onClick={() => setIsNearbyModalOpen(true)}
+                  className="text-xs text-emerald-700 hover:text-emerald-800 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>Find Nearby Branches</span>
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <select
+                  id="storefront-rental-location"
+                  value={selectedLocation}
+                  onChange={(e) => {
+                    setSelectedLocation(e.target.value);
+                    setSelectedVehicle(null);
+                  }}
+                  className="flex-1 px-3 py-2.5 bg-slate-50 hover:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 transition-all focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="">Select a rental location...</option>
+                  {locationOptions.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setIsNearbyModalOpen(true)}
+                  title="Find nearby branches with GPS"
+                  className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer flex-shrink-0"
+                >
+                  <Navigation className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="hidden sm:inline">Nearby</span>
+                </button>
+              </div>
             </div>
 
             {/* Pickup Date & Time */}
@@ -782,6 +833,18 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Nearby Branches Modal */}
+      <NearbyBranchesModal
+        isOpen={isNearbyModalOpen}
+        onClose={() => setIsNearbyModalOpen(false)}
+        branches={publicBranches}
+        selectedBranchName={selectedLocation}
+        onSelectBranch={(branchName) => {
+          setSelectedLocation(branchName);
+          setSelectedVehicle(null);
+        }}
+      />
     </div>
   );
 };

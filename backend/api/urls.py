@@ -20,9 +20,14 @@ urlpatterns = [
 
     # Public Storefront
     re_path(r'^public/business/(?P<slug>[^/]+)/?$', views.PublicBusinessView.as_view(), name='public_business'),
+    re_path(r'^public/branches/?$', views.PublicBranchesView.as_view(), name='public_branches'),
     re_path(r'^public/vehicles/?$', views.PublicVehiclesView.as_view(), name='public_vehicles'),
     re_path(r'^public/quote/?$', views.PublicQuoteView.as_view(), name='public_quote'),
     re_path(r'^public/bookings/?$', views.PublicBookingView.as_view(), name='public_bookings'),
+
+    # Branches (Admin & Staff)
+    re_path(r'^branches/?$', views.BranchListCreateView.as_view(), name='branches_list_create'),
+    re_path(r'^branches/(?P<pk>[^/]+)/?$', views.BranchDetailView.as_view(), name='branch_detail'),
 
     # Tenants
     re_path(r'^tenants/?$', views.TenantListView.as_view(), name='tenants_list'),

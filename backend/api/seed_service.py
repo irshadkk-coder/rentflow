@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import connection, transaction
 from .models import (
     Tenant, User, Vehicle, Customer, Rental, Invoice,
-    MaintenanceRecord, Enquiry, AuditLog
+    MaintenanceRecord, Enquiry, AuditLog, TeamInvitation, Branch
 )
 
 DEFAULT_PASSWORD_HASH = '$2a$10$6Mldds0oJ3.wquRv.Qekp.PY/dg.2byB4JcS2ZPNRUoNzKzVRMaSO'
@@ -20,7 +20,7 @@ def seed_database():
         raise RuntimeError("Operation aborted: seed_database() is strictly prohibited in production environments.")
 
     with connection.cursor() as cursor:
-        cursor.execute("TRUNCATE audit_logs, enquiries, maintenance_records, invoices, rentals, customers, vehicles, users, tenants CASCADE;")
+        cursor.execute("TRUNCATE audit_logs, enquiries, maintenance_records, invoices, rentals, customers, vehicles, users, team_invitations, branches, tenants CASCADE;")
 
     with transaction.atomic():
         # 1. Tenants
@@ -40,10 +40,48 @@ def seed_database():
                 'securityDepositDefault': 350,
                 'lateFeePerHour': 35,
                 'fuelPenaltyPerPercent': 3.0,
-                'locations': ['Downtown Harbor Hub', 'SFO Airport Terminal', 'Marina Bay Outpost', 'Downtown Hub', 'Airport Terminal'],
+                'locations': ['Downtown Harbor Hub', 'SFO Airport Terminal', 'Marina Bay Outpost'],
                 'categories': ['car', 'motorcycle', 'ebike', 'scooter'],
                 'sequenceCounters': {'rental': 1045, 'invoice': 885}
             }
+        )
+
+        # 1b. Branches for t1
+        Branch.objects.create(
+            id='branch-1-1',
+            tenant=t1,
+            name='Downtown Harbor Hub',
+            address='Suite 100, 100 The Embarcadero',
+            city='San Francisco',
+            pincode='94105',
+            latitude=Decimal('37.793600'),
+            longitude=Decimal('-122.395800'),
+            phone='+1 (415) 555-0142',
+            is_active=True
+        )
+        Branch.objects.create(
+            id='branch-1-2',
+            tenant=t1,
+            name='SFO Airport Terminal',
+            address='Level 2, International Terminal Blvd',
+            city='San Francisco',
+            pincode='94128',
+            latitude=Decimal('37.621300'),
+            longitude=Decimal('-122.379000'),
+            phone='+1 (415) 555-0199',
+            is_active=True
+        )
+        Branch.objects.create(
+            id='branch-1-3',
+            tenant=t1,
+            name='Marina Bay Outpost',
+            address='Marina Blvd & Scott St, Marina District',
+            city='San Francisco',
+            pincode='94123',
+            latitude=Decimal('37.803700'),
+            longitude=Decimal('-122.436800'),
+            phone='+1 (415) 555-0177',
+            is_active=True
         )
 
         t2 = Tenant.objects.create(
@@ -66,6 +104,32 @@ def seed_database():
                 'categories': ['car', 'ebike'],
                 'sequenceCounters': {'rental': 2005, 'invoice': 2205}
             }
+        )
+
+        # 1c. Branches for t2
+        Branch.objects.create(
+            id='branch-2-1',
+            tenant=t2,
+            name='Downtown Hub',
+            address='101 Market St, Financial District',
+            city='San Francisco',
+            pincode='94105',
+            latitude=Decimal('37.794100'),
+            longitude=Decimal('-122.395200'),
+            phone='+1 (415) 555-0201',
+            is_active=True
+        )
+        Branch.objects.create(
+            id='branch-2-2',
+            tenant=t2,
+            name='Metro Train Depot',
+            address='700 4th Street, Mission Bay',
+            city='San Francisco',
+            pincode='94107',
+            latitude=Decimal('37.776500'),
+            longitude=Decimal('-122.394800'),
+            phone='+1 (415) 555-0202',
+            is_active=True
         )
 
         # 2. Users (all seeded/demo accounts verified by default)

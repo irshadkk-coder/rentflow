@@ -15,7 +15,7 @@ from rest_framework import status
 from .models import (
     Tenant, User, Vehicle, Customer, Rental, Invoice,
     MaintenanceRecord, Enquiry, AuditLog, EmailVerificationToken,
-    EmailOTPChallenge, PasswordResetToken, TeamInvitation
+    EmailOTPChallenge, PasswordResetToken, TeamInvitation, Branch
 )
 from .exceptions import EmailDeliveryError
 from .services import AuthService, SequenceService, PricingService
@@ -5309,3 +5309,255 @@ class PublicStorefrontLocationAvailabilityTestSuite(TestCase):
         res = self.client.post('/api/public/bookings', payload, content_type='application/json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('assigned to', res.json()['error'])
+
+
+class LocationAwareBranchTestSuite(TestCase):
+    def setUp(self):
+        seed_database()
+        self.client = Client()
+        self.t1 = Tenant.objects.get(id='tenant-1')
+        self.t2 = Tenant.objects.get(id='tenant-2')
+        self.owner1 = User.objects.get(email='alex.rivera@apexrentals.com')
+        self.manager1 = User.objects.get(email='sarah.chen@apexrentals.com')
+        self.staff1 = User.objects.get(email='jordan.lee@apexrentals.com')
+        self.owner2 = User.objects.filter(tenant=self.t2, role='owner').first()
+
+        self.token_owner1 = AuthService.generate_jwt(self.owner1)
+        self.token_manager1 = AuthService.generate_jwt(self.manager1)
+        self.token_staff1 = AuthService.generate_jwt(self.staff1)
+        self.token_owner2 = AuthService.generate_jwt(self.owner2)
+
+        self.auth_owner1 = {'HTTP_AUTHORIZATION': f'Bearer {self.token_owner1}'}
+        self.auth_manager1 = {'HTTP_AUTHORIZATION': f'Bearer {self.token_manager1}'}
+        self.auth_staff1 = {'HTTP_AUTHORIZATION': f'Bearer {self.token_staff1}'}
+        self.auth_owner2 = {'HTTP_AUTHORIZATION': f'Bearer {self.token_owner2}'}
+
+    def test_admin_can_create_branch(self):
+        """Authorized administrator (owner) can create a new branch with valid coordinates and fields."""
+        payload = {
+            'name': 'Silicon Valley Tech Hub',
+            'address': '500 University Ave, Suite 200',
+            'city': 'Palo Alto',
+            'pincode': '94301',
+            'latitude': 37.441900,
+            'longitude': -122.143000,
+            'phone': '+1 (650) 555-0188',
+            'isActive': True
+        }
+        res = self.client.post('/api/branches', payload, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        data = res.json()
+        self.assertEqual(data['name'], 'Silicon Valley Tech Hub')
+        self.assertEqual(data['city'], 'Palo Alto')
+        self.assertEqual(float(data['latitude']), 37.441900)
+        self.assertEqual(float(data['longitude']), -122.143000)
+        self.assertTrue(data['isActive'])
+
+        # Verify persisted in database
+        branch = Branch.objects.get(tenant=self.t1, name='Silicon Valley Tech Hub')
+        self.assertEqual(branch.city, 'Palo Alto')
+        self.assertEqual(branch.pincode, '94301')
+
+    def test_non_admin_cannot_create_branch(self):
+        """Managers and staff cannot create branches (HTTP 403 Forbidden)."""
+        payload = {
+            'name': 'Unauthorized Station',
+            'address': '100 Main St',
+            'city': 'San Francisco',
+            'pincode': '94105',
+            'latitude': 37.790000,
+            'longitude': -122.400000,
+        }
+        res_manager = self.client.post('/api/branches', payload, content_type='application/json', **self.auth_manager1)
+        self.assertEqual(res_manager.status_code, status.HTTP_403_FORBIDDEN)
+
+        res_staff = self.client.post('/api/branches', payload, content_type='application/json', **self.auth_staff1)
+        self.assertEqual(res_staff.status_code, status.HTTP_403_FORBIDDEN)
+
+        res_anon = self.client.post('/api/branches', payload, content_type='application/json')
+        self.assertEqual(res_anon.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_coordinate_validation(self):
+        """Coordinates outside valid boundaries or non-numeric must return HTTP 400."""
+        # Latitude out of bounds
+        res = self.client.post('/api/branches', {
+            'name': 'North Pole Depot',
+            'address': '1 Arctic Way',
+            'city': 'Arctic',
+            'pincode': '99999',
+            'latitude': 95.5,
+            'longitude': -122.0
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('latitude', str(res.json()).lower())
+
+        # Longitude out of bounds
+        res2 = self.client.post('/api/branches', {
+            'name': 'Far East Depot',
+            'address': '1 East Way',
+            'city': 'Ocean',
+            'pincode': '99999',
+            'latitude': 37.0,
+            'longitude': 195.0
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('longitude', str(res2.json()).lower())
+
+        # Non-numeric coordinate
+        res3 = self.client.post('/api/branches', {
+            'name': 'Invalid Coord Depot',
+            'address': '1 Way',
+            'city': 'SF',
+            'pincode': '94105',
+            'latitude': 'not-a-number',
+            'longitude': -122.0
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res3.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_required_fields_and_duplicate_name_validation(self):
+        """Missing required fields or duplicate branch name returns HTTP 400."""
+        # Missing address
+        res = self.client.post('/api/branches', {
+            'name': 'Incomplete Depot',
+            'city': 'SF',
+            'pincode': '94105',
+            'latitude': 37.0,
+            'longitude': -122.0
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Duplicate branch name for same tenant
+        res_dup = self.client.post('/api/branches', {
+            'name': 'Downtown Harbor Hub',  # already exists from seed
+            'address': 'Duplicate St',
+            'city': 'SF',
+            'pincode': '94105',
+            'latitude': 37.790000,
+            'longitude': -122.400000
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res_dup.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already exists', res_dup.json()['error'])
+
+    def test_admin_can_update_and_deactivate_branch(self):
+        """Owner can edit branch details and toggle active status."""
+        branch = Branch.objects.get(tenant=self.t1, name='Downtown Harbor Hub')
+        # Update address and phone
+        res_update = self.client.put(f'/api/branches/{branch.id}', {
+            'name': 'Downtown Harbor Hub',
+            'address': '101 Embarcadero Plaza',
+            'city': 'San Francisco',
+            'pincode': '94105',
+            'latitude': 37.793600,
+            'longitude': -122.395800,
+            'phone': '+1 (415) 555-9999',
+            'isActive': True
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res_update.status_code, status.HTTP_200_OK)
+        branch.refresh_from_db()
+        self.assertEqual(branch.address, '101 Embarcadero Plaza')
+        self.assertEqual(branch.phone, '+1 (415) 555-9999')
+
+        # Deactivate branch
+        res_deact = self.client.delete(f'/api/branches/{branch.id}', **self.auth_owner1)
+        self.assertEqual(res_deact.status_code, status.HTTP_200_OK)
+        branch.refresh_from_db()
+        self.assertFalse(branch.is_active)
+
+    def test_tenant_isolation_on_branch_access(self):
+        """Owner of Tenant 1 cannot access, modify, or deactivate branches of Tenant 2."""
+        branch_t2 = Branch.objects.get(tenant=self.t2, name='Downtown Hub')
+        # Attempt to GET
+        res_get = self.client.get(f'/api/branches/{branch_t2.id}', **self.auth_owner1)
+        self.assertEqual(res_get.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Attempt to PUT
+        res_put = self.client.put(f'/api/branches/{branch_t2.id}', {
+            'name': 'Hijacked Branch',
+            'address': '123 Fake',
+            'city': 'SF',
+            'pincode': '94105',
+            'latitude': 37.0,
+            'longitude': -122.0
+        }, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res_put.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Attempt to DELETE
+        res_del = self.client.delete(f'/api/branches/{branch_t2.id}', **self.auth_owner1)
+        self.assertEqual(res_del.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_public_branches_endpoint_returns_only_active_branches(self):
+        """Public API GET /api/public/branches returns only active branches and safe fields."""
+        # Deactivate Marina Bay Outpost
+        marina = Branch.objects.get(tenant=self.t1, name='Marina Bay Outpost')
+        marina.is_active = False
+        marina.save()
+
+        res = self.client.get('/api/public/branches?slug=apex-rentals')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        names = [b['name'] for b in data]
+
+        self.assertIn('Downtown Harbor Hub', names)
+        self.assertIn('SFO Airport Terminal', names)
+        self.assertNotIn('Marina Bay Outpost', names)  # Inactive must be excluded
+
+        # Verify safe fields
+        first_branch = data[0]
+        self.assertIn('id', first_branch)
+        self.assertIn('name', first_branch)
+        self.assertIn('address', first_branch)
+        self.assertIn('city', first_branch)
+        self.assertIn('pincode', first_branch)
+        self.assertIn('latitude', first_branch)
+        self.assertIn('longitude', first_branch)
+        self.assertIn('phone', first_branch)
+        # Should not leak internal fields
+        self.assertNotIn('tenantId', first_branch)
+        self.assertNotIn('tenant', first_branch)
+
+    def test_branch_selection_filters_vehicle_catalog_and_availability(self):
+        """Vehicles returned on public storefront are filtered to the selected branch and date availability."""
+        # Query SFO Airport Terminal
+        res_sfo = self.client.get('/api/public/vehicles?slug=apex-rentals&location=SFO%20Airport%20Terminal')
+        self.assertEqual(res_sfo.status_code, status.HTTP_200_OK)
+        vehicles_sfo = res_sfo.json()
+        for v in vehicles_sfo:
+            self.assertEqual(v['location'], 'SFO Airport Terminal')
+
+        # Query Downtown Harbor Hub
+        res_downtown = self.client.get('/api/public/vehicles?slug=apex-rentals&location=Downtown%20Harbor%20Hub')
+        self.assertEqual(res_downtown.status_code, status.HTTP_200_OK)
+        vehicles_downtown = res_downtown.json()
+        for v in vehicles_downtown:
+            self.assertEqual(v['location'], 'Downtown Harbor Hub')
+
+        # Date availability: create confirmed rental for vehicle 1 at Downtown Harbor Hub
+        v_downtown = vehicles_downtown[0]
+        cust = Customer.objects.filter(tenant=self.t1).first()
+        veh_obj = Vehicle.objects.get(id=v_downtown['id'])
+        Rental.objects.create(
+            tenant=self.t1,
+            rental_number='TEST-LOC-AVAIL-1',
+            customer=cust,
+            vehicle=veh_obj,
+            customer_name='Avail Test',
+            vehicle_name=veh_obj.name,
+            status='confirmed',
+            start_date=timezone.make_aware(datetime.datetime(2026, 12, 10, 10, 0, 0)),
+            end_date=timezone.make_aware(datetime.datetime(2026, 12, 15, 10, 0, 0)),
+            daily_rate=Decimal('100.00'),
+            days=5,
+            base_rental=Decimal('500.00'),
+            total_amount=Decimal('500.00'),
+            balance_due=Decimal('500.00')
+        )
+
+        # Checking availability during overlapping dates should exclude this vehicle
+        res_avail = self.client.get(
+            '/api/public/vehicles?slug=apex-rentals&location=Downtown%20Harbor%20Hub'
+            '&startDate=2026-12-12T10:00:00Z&endDate=2026-12-14T10:00:00Z'
+        )
+        self.assertEqual(res_avail.status_code, status.HTTP_200_OK)
+        avail_ids = [v['id'] for v in res_avail.json()]
+        self.assertNotIn(v_downtown['id'], avail_ids)
+

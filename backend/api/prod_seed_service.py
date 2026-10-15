@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 from django.utils import timezone
 from django.db import transaction
-from .models import Tenant, User, Vehicle
+from .models import Tenant, User, Vehicle, Branch
 from .services import AuthService
 
 logger = logging.getLogger(__name__)
@@ -332,11 +332,49 @@ def initialize_production_environment(
                         'Downtown Harbor Hub',
                         'SFO Airport Terminal',
                         'Marina Bay Outpost',
-                        'Downtown Hub',
-                        'Airport Terminal'
                     ],
                     'categories': ['car', 'motorcycle', 'ebike', 'scooter'],
                     'sequenceCounters': {'rental': 1000, 'invoice': 800}
+                }
+            )
+            # Create default branches for new production tenant
+            Branch.objects.get_or_create(
+                tenant=tenant,
+                name='Downtown Harbor Hub',
+                defaults={
+                    'address': 'Suite 100, 100 The Embarcadero',
+                    'city': 'San Francisco',
+                    'pincode': '94105',
+                    'latitude': Decimal('37.793600'),
+                    'longitude': Decimal('-122.395800'),
+                    'phone': tenant.phone or '+1 (415) 555-0142',
+                    'is_active': True,
+                }
+            )
+            Branch.objects.get_or_create(
+                tenant=tenant,
+                name='SFO Airport Terminal',
+                defaults={
+                    'address': 'Level 2, International Terminal Blvd',
+                    'city': 'San Francisco',
+                    'pincode': '94128',
+                    'latitude': Decimal('37.621300'),
+                    'longitude': Decimal('-122.379000'),
+                    'phone': tenant.phone or '+1 (415) 555-0199',
+                    'is_active': True,
+                }
+            )
+            Branch.objects.get_or_create(
+                tenant=tenant,
+                name='Marina Bay Outpost',
+                defaults={
+                    'address': 'Marina Blvd & Scott St, Marina District',
+                    'city': 'San Francisco',
+                    'pincode': '94123',
+                    'latitude': Decimal('37.803700'),
+                    'longitude': Decimal('-122.436800'),
+                    'phone': tenant.phone or '+1 (415) 555-0177',
+                    'is_active': True,
                 }
             )
             result_summary['tenant_action'] = 'created_new'

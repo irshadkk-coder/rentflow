@@ -84,6 +84,35 @@ export interface Tenant {
   categories: VehicleType[];
 }
 
+export interface Branch {
+  id: string;
+  tenantId?: string;
+  name: string;
+  address: string;
+  city: string;
+  pincode: string;
+  latitude: number;
+  longitude: number;
+  phone?: string;
+  contactNumber?: string;
+  isActive: boolean;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PublicBranch {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  pincode: string;
+  latitude: number;
+  longitude: number;
+  phone?: string;
+  distanceKm?: number;
+}
+
 export interface PublicVehicle {
   id: string;
   name: string;

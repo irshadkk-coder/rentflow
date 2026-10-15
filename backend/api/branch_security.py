@@ -3,13 +3,25 @@ from django.db.models import QuerySet
 from .models import Tenant, User, Vehicle, Rental, MaintenanceRecord, Invoice
 
 
-def get_tenant_locations(tenant: Tenant) -> list[str]:
+def get_tenant_locations(tenant: Tenant, include_inactive: bool = False) -> list[str]:
     """
     Retrieve sanitized list of valid branch/location strings configured for the given tenant.
+    Checks the Branch model first; falls back safely to tenant.settings['locations'].
     Defaults safely to ['Main Station Hub'] if no locations are configured.
     """
     if not tenant:
         return ['Main Station Hub']
+    try:
+        from .models import Branch
+        qs = Branch.objects.filter(tenant=tenant)
+        if not include_inactive:
+            qs = qs.filter(is_active=True)
+        branch_names = list(qs.values_list('name', flat=True))
+        if branch_names:
+            return branch_names
+    except Exception:
+        pass
+
     settings_dict = tenant.settings if isinstance(tenant.settings, dict) else {}
     raw_locations = settings_dict.get('locations')
     if isinstance(raw_locations, list):
@@ -19,21 +31,18 @@ def get_tenant_locations(tenant: Tenant) -> list[str]:
     return ['Main Station Hub']
 
 
-def is_valid_tenant_branch(tenant: Tenant, branch_name: str) -> bool:
+def is_valid_tenant_branch(tenant: Tenant, branch_name: str, include_inactive: bool = False) -> bool:
     """
-    Check if a candidate branch belongs to the tenant's configured branches.
-    If the tenant has an explicit locations list configured in settings, strictly enforces membership.
+    Check if a candidate branch belongs to the tenant's configured branches and is active.
     """
     if not branch_name or not str(branch_name).strip():
         return False
     candidate = str(branch_name).strip()
-    settings_dict = tenant.settings if (tenant and isinstance(tenant.settings, dict)) else {}
-    raw_locations = settings_dict.get('locations')
-    if isinstance(raw_locations, list) and len(raw_locations) > 0:
-        valid_locations = [str(loc).strip() for loc in raw_locations if loc and str(loc).strip()]
+    valid_locations = get_tenant_locations(tenant, include_inactive=include_inactive)
+    if valid_locations:
         return candidate in valid_locations or any(loc.lower() == candidate.lower() for loc in valid_locations)
-    # If tenant was created without explicit locations list (e.g. ad-hoc unit test), allow valid string
     return bool(candidate)
+
 
 
 def resolve_user_branch_scope(user: User, requested_location: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:

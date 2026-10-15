@@ -202,6 +202,7 @@ REST_FRAMEWORK = {
         'public_booking': '25/minute',
         'public_quote': '60/minute',
         'public_enquiry': '30/minute',
+        'public_branches': '120/minute',
     },
     'UNAUTHENTICATED_USER': None,
     'EXCEPTION_HANDLER': 'api.exceptions.custom_exception_handler',

@@ -23,6 +23,10 @@ class RentFlowUser:
         return self._db_user
 
     @property
+    def tenant(self):
+        return self.db_user.tenant if self.db_user else None
+
+    @property
     def pk(self):
         return self.id
 

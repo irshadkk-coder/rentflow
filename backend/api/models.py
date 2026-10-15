@@ -382,3 +382,27 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"[{self.action}] {self.entity_type} {self.entity_id} by {self.user_name}"
+
+
+class Branch(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='branches', db_column='tenant_id')
+    name = models.CharField(max_length=255)
+    address = models.CharField(max_length=255)
+    city = models.CharField(max_length=100)
+    pincode = models.CharField(max_length=20)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True, blank=True, null=True)
+
+    class Meta:
+        db_table = 'branches'
+        unique_together = (('tenant', 'name'),)
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} - {self.city} ({'Active' if self.is_active else 'Inactive'})"
+

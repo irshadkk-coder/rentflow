@@ -4,7 +4,7 @@ from django.utils.text import slugify
 from rest_framework import serializers
 from .models import (
     Tenant, User, Vehicle, Customer, Rental, Invoice,
-    MaintenanceRecord, Enquiry, AuditLog, TeamInvitation
+    MaintenanceRecord, Enquiry, AuditLog, TeamInvitation, Branch
 )
 from .anti_spam import validate_phone
 
@@ -898,3 +898,81 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
     def get_timestamp(self, obj):
         return obj.created_at.isoformat() if obj.created_at else None
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    tenantId = serializers.CharField(source='tenant_id', read_only=True)
+    isActive = serializers.BooleanField(source='is_active', required=False, default=True)
+
+    class Meta:
+        model = Branch
+        fields = [
+            'id', 'tenantId', 'name', 'address', 'city', 'pincode',
+            'latitude', 'longitude', 'phone', 'isActive',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'tenantId', 'created_at', 'updated_at']
+
+    def to_internal_value(self, data):
+        normalized = dict(data)
+        if 'contactNumber' in normalized and 'phone' not in normalized:
+            normalized['phone'] = normalized['contactNumber']
+        if 'lat' in normalized and 'latitude' not in normalized:
+            normalized['latitude'] = normalized['lat']
+        if 'lng' in normalized and 'longitude' not in normalized:
+            normalized['longitude'] = normalized['lng']
+        elif 'lon' in normalized and 'longitude' not in normalized:
+            normalized['longitude'] = normalized['lon']
+        return super().to_internal_value(normalized)
+
+    def validate_name(self, value):
+        val = str(value).strip()
+        if not val:
+            raise serializers.ValidationError("Branch name is required.")
+        return val
+
+    def validate_address(self, value):
+        val = str(value).strip()
+        if not val:
+            raise serializers.ValidationError("Address is required.")
+        return val
+
+    def validate_city(self, value):
+        val = str(value).strip()
+        if not val:
+            raise serializers.ValidationError("City is required.")
+        return val
+
+    def validate_pincode(self, value):
+        val = str(value).strip()
+        if not val:
+            raise serializers.ValidationError("Pincode / Postal code is required.")
+        return val
+
+    def validate_latitude(self, value):
+        try:
+            val = float(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Latitude must be a valid number.")
+        if val < -90.0 or val > 90.0:
+            raise serializers.ValidationError("Latitude must be between -90 and 90 degrees.")
+        return round(val, 6)
+
+    def validate_longitude(self, value):
+        try:
+            val = float(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Longitude must be a valid number.")
+        if val < -180.0 or val > 180.0:
+            raise serializers.ValidationError("Longitude must be between -180 and 180 degrees.")
+        return round(val, 6)
+
+
+class PublicBranchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Branch
+        fields = [
+            'id', 'name', 'address', 'city', 'pincode',
+            'latitude', 'longitude', 'phone'
+        ]
+
