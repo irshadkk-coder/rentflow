@@ -49,6 +49,9 @@ RUN mkdir -p /app/backend/staticfiles /app/backend/media
 # Collect Django static assets (admin, rest_framework, etc.)
 RUN python /app/backend/manage.py collectstatic --noinput
 
+# Ensure entrypoint script is executable
+RUN chmod +x /app/backend/entrypoint.sh
+
 # Non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser && \
     chown -R appuser:appgroup /app
@@ -61,6 +64,9 @@ HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/api/health/ || exit 1
 
 WORKDIR /app/backend
+
+# Run migrations automatically on container start, then start Gunicorn
+ENTRYPOINT ["/app/backend/entrypoint.sh"]
 
 # Default entrypoint starts Gunicorn with production configuration
 CMD ["gunicorn", "--config", "gunicorn.conf.py", "rentflow_backend.wsgi:application"]
