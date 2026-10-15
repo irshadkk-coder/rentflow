@@ -18,11 +18,13 @@ import {
   ExternalLink,
   Power,
   X,
-  AlertCircle
+  AlertCircle,
+  Compass
 } from 'lucide-react';
 import { Tenant, User, Branch } from '../types.js';
 import { TeamManagementView } from './TeamManagementView.js';
 import { api } from '../lib/api.js';
+import { MapLocationPickerModal, SelectedLocationData } from './MapLocationPickerModal.js';
 
 interface SettingsViewProps {
   tenant: Tenant;
@@ -81,6 +83,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Interactive Map Picker modal state
+  const [isMapPickerOpen, setIsMapPickerOpen] = useState(false);
+
+  const handleMapLocationConfirm = (loc: SelectedLocationData) => {
+    setBranchForm(prev => ({
+      ...prev,
+      latitude: String(loc.latitude),
+      longitude: String(loc.longitude),
+      ...(loc.address && !prev.address.trim() ? { address: loc.address } : {}),
+      ...(loc.city && !prev.city.trim() ? { city: loc.city } : {}),
+      ...(loc.pincode && !prev.pincode.trim() ? { pincode: loc.pincode } : {})
+    }));
+
+    setBranchFormErrors(prev => {
+      const next = { ...prev };
+      delete next.latitude;
+      delete next.longitude;
+      return next;
+    });
+
+    showToast(`Coordinates selected from map: ${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`);
+  };
 
   const fetchBranches = useCallback(async () => {
     try {
@@ -684,11 +709,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                 </div>
 
+                {/* Map Picker Trigger Action */}
+                <div className="bg-emerald-50/70 border border-emerald-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Compass className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-900 text-xs">Pinpoint Location on Map</p>
+                      <p className="text-[11px] text-slate-500">
+                        Search places or click &amp; drag marker on OpenStreetMap to auto-populate coordinates.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    id="select-location-on-map-btn"
+                    onClick={() => setIsMapPickerOpen(true)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+                  >
+                    <Compass className="w-3.5 h-3.5" />
+                    <span>Select Location on Map</span>
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1">
-                      Latitude (-90 to 90) <span className="text-rose-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700 block">
+                        Latitude (-90 to 90) <span className="text-rose-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-normal">Manual fallback</span>
+                    </div>
                     <input
                       type="number"
                       step="any"
@@ -704,9 +757,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1">
-                      Longitude (-180 to 180) <span className="text-rose-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700 block">
+                        Longitude (-180 to 180) <span className="text-rose-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-normal">Manual fallback</span>
+                    </div>
                     <input
                       type="number"
                       step="any"
@@ -773,6 +829,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Interactive OpenStreetMap Location Picker Modal */}
+        <MapLocationPickerModal
+          isOpen={isMapPickerOpen}
+          onClose={() => setIsMapPickerOpen(false)}
+          onConfirm={handleMapLocationConfirm}
+          initialLat={branchForm.latitude ? parseFloat(branchForm.latitude) : undefined}
+          initialLng={branchForm.longitude ? parseFloat(branchForm.longitude) : undefined}
+          initialAddress={branchForm.address || branchForm.city || undefined}
+          branchName={branchForm.name || undefined}
+        />
 
         {/* Save & Reset Controls */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
