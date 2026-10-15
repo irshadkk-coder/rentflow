@@ -4,6 +4,8 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from rest_framework.renderers import JSONRenderer
+from rest_framework.negotiation import DefaultContentNegotiation
 
 logger = logging.getLogger(__name__)
 from rest_framework.throttling import ScopedRateThrottle
@@ -94,9 +96,17 @@ def paginate(queryset, page_str, limit_str):
 # ----------------------------------------------------
 # SYSTEM & HEALTH
 # ----------------------------------------------------
+class HealthCheckContentNegotiation(DefaultContentNegotiation):
+    def select_renderer(self, request, renderers, format_suffix=None):
+        # Unconditionally select JSONRenderer regardless of client Accept header
+        return (renderers[0], renderers[0].media_type)
+
+
 class HealthCheckView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    renderer_classes = [JSONRenderer]
+    content_negotiation_class = HealthCheckContentNegotiation
 
     def get(self, request):
         return Response({

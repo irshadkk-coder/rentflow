@@ -712,6 +712,23 @@ class SecurityRegressionTestSuite(TestCase):
             res = self.client.get(url)
             self.assertEqual(res.status_code, status.HTTP_200_OK, f"{url} should be publicly accessible")
 
+    def test_health_check_returns_json_under_browser_and_html_accept_headers(self):
+        """Verifies GET /api/health always returns JSON (never crashes on template rendering)."""
+        accept_headers = [
+            'text/html',
+            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'application/json',
+            '*/*',
+        ]
+        for accept in accept_headers:
+            res = self.client.get('/api/health', HTTP_ACCEPT=accept)
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            self.assertEqual(res['Content-Type'], 'application/json')
+            data = res.json()
+            self.assertEqual(data.get('status'), 'ok')
+            self.assertEqual(data.get('engine'), 'Python/Django')
+            self.assertIn('timestamp', data)
+
     # ----------------------------------------------------
     # L-02: Tenant enumeration protection
     # ----------------------------------------------------
