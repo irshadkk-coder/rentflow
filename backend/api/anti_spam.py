@@ -1,3 +1,4 @@
+import logging
 import re
 import urllib.request
 import urllib.parse
@@ -7,6 +8,8 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.cache import cache
 from .models import Rental, Vehicle, Tenant
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_phone(phone: str) -> str:
@@ -55,63 +58,108 @@ def validate_phone(phone: str) -> tuple[bool, str]:
 
 def verify_captcha_token(token: str, remote_ip: str | None = None, is_owner_signup: bool = False) -> tuple[bool, str]:
     """
-    Verify Cloudflare Turnstile / Bot protection token.
-    - Development / Testing mode:
-      - If token is an explicit rejection token ('invalid-captcha-token', 'turnstile-fail'): reject.
-      - If testing owner signup: token is required (reject if empty).
-      - If testing public customer booking: preserve existing booking tests (allow dev/empty tokens).
-    - Production mode:
-      - Requires TURNSTILE_SECRET_KEY and verifies server-side.
-      - If DEBUG=False and credentials missing: fails safely.
+    Verify Cloudflare Turnstile token via server-side Siteverify:
+    POST https://challenges.cloudflare.com/turnstile/v0/siteverify
+
+    Rules:
+    1. Rejection tokens ('invalid-captcha-token', 'turnstile-fail') are immediately rejected.
+    2. Missing or empty tokens are rejected in production.
+    3. Dev mock tokens (starting with 'dev-' or 'test-') are strictly rejected in production.
+    4. When TURNSTILE_SECRET_KEY is configured:
+       - Server always calls Cloudflare Siteverify API.
+       - Never trusts client-side verification alone.
+       - Rejects missing, invalid, expired, and failed tokens.
     """
     import sys
-    secret_key = getattr(settings, 'TURNSTILE_SECRET_KEY', '') or ''
+    import urllib.error
+
+    secret_key = (
+        getattr(settings, 'TURNSTILE_SECRET_KEY', '')
+        or getattr(settings, 'CLOUDFLARE_TURNSTILE_SECRET_KEY', '')
+        or getattr(settings, 'CF_TURNSTILE_SECRET_KEY', '')
+        or ''
+    ).strip()
     is_debug = getattr(settings, 'DEBUG', False)
     is_testing = getattr(settings, 'TESTING', False) or ('test' in sys.argv)
     test_mode = getattr(settings, 'TEST_MODE', is_testing)
     clean_token = token.strip() if token else ''
 
-    # Explicit test failure tokens
+    # 1. Explicit rejection tokens (used in automated tests and security suites)
     if clean_token in ('invalid-captcha-token', 'turnstile-fail'):
         return False, "Bot verification failed. Please try again."
 
-    # Development or Automated Test Mode
-    if is_debug or test_mode:
-        if is_owner_signup:
-            if not clean_token:
-                return False, "Bot verification is required to complete signup."
-            return True, "Dev/test verified"
-        else:
-            # Public customer booking in dev/test: allow dev bypass
-            return True, "Dev/test verified"
-
-    # Production Mode (DEBUG=False, not in test mode)
-    if not secret_key:
-        return False, "Bot protection service is currently unavailable. Please contact customer support."
-
+    # 2. Reject empty tokens
     if not clean_token:
+        # In automated test mode, preserve legacy tests that do not supply captchaToken
+        if test_mode and not is_owner_signup:
+            return True, "Dev/test verified"
+        if is_debug and not secret_key:
+            if is_owner_signup:
+                return False, "Bot verification is required to complete signup."
+            return True, "Dev verified"
         err_msg = "Bot verification is required to complete signup." if is_owner_signup else "Bot verification is required to complete your booking."
         return False, err_msg
 
-    # Call Cloudflare Turnstile verify API
+    # 3. Handle dev/mock tokens ('dev-turnstile-token', 'dev-token', etc.)
+    is_mock_token = clean_token.startswith(('dev-', 'test-', 'mock-'))
+    if is_mock_token:
+        # Dev tokens are strictly disallowed in production
+        if not is_debug and not test_mode:
+            logger.warning("Mock/dev token rejected in production environment.")
+            return False, "Invalid bot verification token."
+        # If in automated testing with live/mocked siteverify, allow test tokens through to siteverify
+        if test_mode and clean_token in ('valid-turnstile-response',):
+            pass
+        else:
+            return True, "Dev/test verified"
+
+    # 4. Check secret key availability
+    if not secret_key:
+        if is_debug or test_mode:
+            logger.info("TURNSTILE_SECRET_KEY not set; allowing dev verification.")
+            return True, "Dev verified"
+        logger.error("TURNSTILE_SECRET_KEY is not configured on the server.")
+        return False, "Bot protection service is currently unavailable. Please contact customer support."
+
+    # 5. Call Cloudflare Turnstile Siteverify API
     url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
     payload = {
         'secret': secret_key,
         'response': clean_token,
     }
-    if remote_ip:
+    if remote_ip and remote_ip not in ('127.0.0.1', '::1', 'localhost'):
         payload['remoteip'] = remote_ip
 
     try:
         data = urllib.parse.urlencode(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
-        with urllib.request.urlopen(req, timeout=5) as response:
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'RentFlow-Backend/1.0',
+            }
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
             result = json.loads(response.read().decode('utf-8'))
             if result.get('success'):
+                logger.info("Cloudflare Turnstile token verified successfully.")
                 return True, "Verified"
             else:
+                error_codes = result.get('error-codes', [])
+                logger.warning("Cloudflare Turnstile verification rejected: error_codes=%s", error_codes)
                 return False, "Bot verification failed. Please try again."
-    except Exception:
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode('utf-8')
+            res = json.loads(body)
+            error_codes = res.get('error-codes', [])
+            logger.warning("Cloudflare Turnstile HTTP %d: error_codes=%s", e.code, error_codes)
+        except Exception:
+            logger.error("Cloudflare Turnstile HTTP %d response: %s", e.code, str(e))
+        return False, "Bot verification failed. Please try again."
+    except Exception as e:
+        logger.error("Cloudflare Turnstile verification request failed: %s", str(e))
         return False, "Unable to verify bot challenge. Please refresh and try again."
 
 

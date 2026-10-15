@@ -99,14 +99,17 @@ class PublicBookingCreateSerializer(serializers.Serializer):
     customerName = serializers.CharField(required=True, max_length=255)
     customerEmail = serializers.CharField(required=False, allow_blank=True, default='')
     customerPhone = serializers.CharField(required=True, max_length=50)
+    location = serializers.CharField(required=False, allow_blank=True, default='')
     pickupLocation = serializers.CharField(required=False, default='Downtown Harbor Hub', max_length=255)
     dropoffLocation = serializers.CharField(required=False, default='Downtown Harbor Hub', max_length=255)
     rentalRateType = serializers.CharField(required=False, default='daily', max_length=32)
     insuranceOption = serializers.CharField(required=False, allow_blank=True, default='basic')
     notes = serializers.CharField(required=False, allow_blank=True, default='')
     addOns = serializers.ListField(child=serializers.CharField(), required=False, default=list)
-    addOnIds = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     captchaToken = serializers.CharField(required=False, allow_blank=True, default='')
+    captcha_token = serializers.CharField(required=False, allow_blank=True, default='')
+    turnstile_token = serializers.CharField(required=False, allow_blank=True, default='')
+    cf_turnstile_response = serializers.CharField(source='cf-turnstile-response', required=False, allow_blank=True, default='')
 
     def validate_customerName(self, value):
         val = value.strip()
@@ -155,7 +158,10 @@ class TenantRegistrationSerializer(serializers.Serializer):
     ownerEmail = serializers.EmailField(max_length=255, required=True)
     password = serializers.CharField(max_length=128, required=True, write_only=True)
     confirmPassword = serializers.CharField(max_length=128, required=True, write_only=True)
-    captchaToken = serializers.CharField(max_length=1024, required=False, allow_blank=True, default='')
+    captchaToken = serializers.CharField(max_length=4096, required=False, allow_blank=True, default='')
+    captcha_token = serializers.CharField(max_length=4096, required=False, allow_blank=True, default='')
+    turnstile_token = serializers.CharField(max_length=4096, required=False, allow_blank=True, default='')
+    cf_turnstile_response = serializers.CharField(source='cf-turnstile-response', max_length=4096, required=False, allow_blank=True, default='')
 
     def validate_companyName(self, value):
         val = value.strip()

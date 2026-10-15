@@ -729,6 +729,99 @@ class SecurityRegressionTestSuite(TestCase):
             self.assertEqual(data.get('engine'), 'Python/Django')
             self.assertIn('timestamp', data)
 
+    def test_turnstile_bot_verification_and_rejection(self):
+        """Verifies bot verification rejects invalid captcha tokens and handles verification safely."""
+        from api.anti_spam import verify_captcha_token
+
+        # 1. Invalid captcha token must always be rejected
+        ok, msg = verify_captcha_token('invalid-captcha-token', remote_ip='127.0.0.1')
+        self.assertFalse(ok)
+        self.assertIn('Bot verification failed', msg)
+
+        # 2. Public booking with invalid token must return 400
+        payload = {
+            'slug': 'apex-rentals',
+            'vehicleId': 'veh-1',
+            'startDate': '2026-11-20T10:00:00Z',
+            'endDate': '2026-11-22T10:00:00Z',
+            'customerName': 'Bot Spammer',
+            'customerPhone': '+1 555-0199',
+            'captchaToken': 'invalid-captcha-token',
+        }
+        res = self.client.post('/api/public/bookings', payload, content_type='application/json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Bot verification failed', res.json().get('error', ''))
+
+    def test_turnstile_siteverify_mock_success_and_failure(self):
+        """Verifies siteverify external call with success and failure responses."""
+        from unittest.mock import patch, MagicMock
+        from api.anti_spam import verify_captcha_token
+        import json
+
+        # 1. Successful siteverify call
+        mock_success_resp = MagicMock()
+        mock_success_resp.read.return_value = json.dumps({'success': True}).encode('utf-8')
+        mock_success_resp.__enter__.return_value = mock_success_resp
+
+        with override_settings(DEBUG=False, TEST_MODE=False, TURNSTILE_SECRET_KEY='0x4AAAAAAsecret'):
+            with patch('urllib.request.urlopen', return_value=mock_success_resp) as mock_urlopen:
+                ok, msg = verify_captcha_token('real-turnstile-token-12345', remote_ip='203.0.113.195')
+                self.assertTrue(ok)
+                self.assertEqual(msg, 'Verified')
+                mock_urlopen.assert_called_once()
+                call_args = mock_urlopen.call_args[0]
+                req = call_args[0]
+                self.assertEqual(req.full_url, 'https://challenges.cloudflare.com/turnstile/v0/siteverify')
+
+        # 2. Rejection from Cloudflare siteverify
+        mock_fail_resp = MagicMock()
+        mock_fail_resp.read.return_value = json.dumps({'success': False, 'error-codes': ['invalid-input-response']}).encode('utf-8')
+        mock_fail_resp.__enter__.return_value = mock_fail_resp
+
+        with override_settings(DEBUG=False, TEST_MODE=False, TURNSTILE_SECRET_KEY='0x4AAAAAAsecret'):
+            with patch('urllib.request.urlopen', return_value=mock_fail_resp):
+                ok, msg = verify_captcha_token('expired-token-12345', remote_ip='203.0.113.195')
+                self.assertFalse(ok)
+                self.assertIn('Bot verification failed', msg)
+
+    def test_turnstile_http_error_handled(self):
+        """Verifies Cloudflare 400 Bad Request error is handled gracefully."""
+        from unittest.mock import patch
+        import urllib.error
+        import io
+        from api.anti_spam import verify_captcha_token
+
+        error_body = io.BytesIO(b'{"success": false, "error-codes": ["invalid-input-secret"]}')
+        http_err = urllib.error.HTTPError(
+            url='https://challenges.cloudflare.com/turnstile/v0/siteverify',
+            code=400,
+            msg='Bad Request',
+            hdrs={},
+            fp=error_body
+        )
+
+        with override_settings(DEBUG=False, TEST_MODE=False, TURNSTILE_SECRET_KEY='0x4AAAAAAsecret'):
+            with patch('urllib.request.urlopen', side_effect=http_err):
+                ok, msg = verify_captcha_token('any-token', remote_ip='203.0.113.195')
+                self.assertFalse(ok)
+                self.assertIn('Bot verification failed', msg)
+
+    def test_turnstile_dev_tokens_rejected_in_production(self):
+        """Verifies dev/mock tokens are rejected in production."""
+        from api.anti_spam import verify_captcha_token
+        with override_settings(DEBUG=False, TEST_MODE=False, TURNSTILE_SECRET_KEY='0x4AAAAAAsecret'):
+            ok, msg = verify_captcha_token('dev-turnstile-token-12345')
+            self.assertFalse(ok)
+            self.assertIn('Invalid bot verification token', msg)
+
+    def test_turnstile_empty_token_rejected_in_production(self):
+        """Verifies missing/empty tokens are rejected in production."""
+        from api.anti_spam import verify_captcha_token
+        with override_settings(DEBUG=False, TEST_MODE=False, TURNSTILE_SECRET_KEY='0x4AAAAAAsecret'):
+            ok, msg = verify_captcha_token('')
+            self.assertFalse(ok)
+            self.assertIn('Bot verification is required', msg)
+
     # ----------------------------------------------------
     # L-02: Tenant enumeration protection
     # ----------------------------------------------------
@@ -5043,3 +5136,176 @@ class RentalManualPaymentAndLifecycleTestSuite(TestCase):
         self.assertIn('rental.checkout', actions)
         self.assertIn('rental.checkin', actions)
         self.assertIn('rental.payment', actions)
+
+
+class PublicStorefrontLocationAvailabilityTestSuite(TestCase):
+    def setUp(self):
+        seed_database()
+        self.client = Client()
+        self.tenant = Tenant.objects.get(slug='apex-rentals')
+
+        # Ensure we have vehicles specifically at Downtown Harbor Hub and SFO Airport Terminal
+        self.v_downtown = Vehicle.objects.filter(
+            tenant=self.tenant,
+            status='available',
+            images__location='Downtown Harbor Hub'
+        ).first()
+
+        self.v_sfo = Vehicle.objects.filter(
+            tenant=self.tenant,
+            status='available',
+            images__location='SFO Airport Terminal'
+        ).first()
+
+        # If seed data didn't have explicit images__location for these, assign them
+        if not self.v_downtown:
+            self.v_downtown = Vehicle.objects.filter(tenant=self.tenant, status='available').first()
+            imgs = self.v_downtown.images if isinstance(self.v_downtown.images, dict) else {}
+            imgs['location'] = 'Downtown Harbor Hub'
+            self.v_downtown.images = imgs
+            self.v_downtown.save()
+
+        if not self.v_sfo:
+            self.v_sfo = Vehicle.objects.filter(tenant=self.tenant, status='available').exclude(id=self.v_downtown.id).first()
+            imgs = self.v_sfo.images if isinstance(self.v_sfo.images, dict) else {}
+            imgs['location'] = 'SFO Airport Terminal'
+            self.v_sfo.images = imgs
+            self.v_sfo.save()
+
+    def test_location_filtering_shows_only_assigned_vehicles(self):
+        """When a customer selects a location, only vehicles at that location are returned."""
+        # 1. Query Downtown Harbor Hub
+        res_downtown = self.client.get('/api/public/vehicles?slug=apex-rentals&location=Downtown+Harbor+Hub')
+        self.assertEqual(res_downtown.status_code, status.HTTP_200_OK)
+        downtown_vehicles = res_downtown.json()
+        self.assertTrue(len(downtown_vehicles) > 0)
+        downtown_ids = [v['id'] for v in downtown_vehicles]
+        self.assertIn(self.v_downtown.id, downtown_ids)
+        self.assertNotIn(self.v_sfo.id, downtown_ids)
+        for v in downtown_vehicles:
+            self.assertEqual(v['location'], 'Downtown Harbor Hub')
+
+        # 2. Query SFO Airport Terminal
+        res_sfo = self.client.get('/api/public/vehicles?slug=apex-rentals&location=SFO+Airport+Terminal')
+        self.assertEqual(res_sfo.status_code, status.HTTP_200_OK)
+        sfo_vehicles = res_sfo.json()
+        self.assertTrue(len(sfo_vehicles) > 0)
+        sfo_ids = [v['id'] for v in sfo_vehicles]
+        self.assertIn(self.v_sfo.id, sfo_ids)
+        self.assertNotIn(self.v_downtown.id, sfo_ids)
+        for v in sfo_vehicles:
+            self.assertEqual(v['location'], 'SFO Airport Terminal')
+
+    def test_invalid_location_rejected_with_400(self):
+        """Selecting an invalid or inactive location returns HTTP 400."""
+        res = self.client.get('/api/public/vehicles?slug=apex-rentals&location=Faketown+Station')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Invalid or inactive rental location', res.json()['error'])
+
+    def test_date_availability_excludes_overlapping_reservations(self):
+        """Vehicles with overlapping confirmed/active rentals are excluded for the requested period."""
+        # Create confirmed rental for v_downtown: Nov 10 to Nov 15, 2026
+        cust = Customer.objects.filter(tenant=self.tenant).first()
+        start_booked = timezone.make_aware(datetime.datetime(2026, 11, 10, 10, 0))
+        end_booked = timezone.make_aware(datetime.datetime(2026, 11, 15, 10, 0))
+
+        Rental.objects.create(
+            tenant=self.tenant,
+            rental_number='RF-TEST-OVERLAP-1',
+            customer=cust,
+            vehicle=self.v_downtown,
+            customer_name=cust.name,
+            vehicle_name=self.v_downtown.name,
+            status='confirmed',
+            start_date=start_booked,
+            end_date=end_booked,
+            daily_rate=self.v_downtown.daily_rate,
+            days=5,
+            base_rental=self.v_downtown.daily_rate * 5,
+            total_amount=self.v_downtown.daily_rate * 5,
+            balance_due=Decimal('0.00'),
+            add_ons=[]
+        )
+
+        # 1. Overlapping range: Nov 12 to Nov 17 -> v_downtown must be EXCLUDED
+        overlap_res = self.client.get(
+            '/api/public/vehicles?slug=apex-rentals&location=Downtown+Harbor+Hub&startDate=2026-11-12T10:00:00Z&endDate=2026-11-17T10:00:00Z'
+        )
+        self.assertEqual(overlap_res.status_code, status.HTTP_200_OK)
+        overlap_ids = [v['id'] for v in overlap_res.json()]
+        self.assertNotIn(self.v_downtown.id, overlap_ids)
+
+        # 2. Non-overlapping range: Nov 20 to Nov 25 -> v_downtown must be INCLUDED
+        free_res = self.client.get(
+            '/api/public/vehicles?slug=apex-rentals&location=Downtown+Harbor+Hub&startDate=2026-11-20T10:00:00Z&endDate=2026-11-25T10:00:00Z'
+        )
+        self.assertEqual(free_res.status_code, status.HTTP_200_OK)
+        free_ids = [v['id'] for v in free_res.json()]
+        self.assertIn(self.v_downtown.id, free_ids)
+
+    def test_single_location_saved_for_both_pickup_and_return(self):
+        """Single selected location is saved identically for pickup and return in the booking."""
+        payload = {
+            'slug': 'apex-rentals',
+            'vehicleId': self.v_downtown.id,
+            'startDate': '2026-12-05T10:00:00Z',
+            'endDate': '2026-12-08T10:00:00Z',
+            'customerName': 'Single Hub Guest',
+            'customerEmail': 'single.hub@example.com',
+            'customerPhone': '+1 555-4433',
+            'location': 'Downtown Harbor Hub',
+            'pickupLocation': 'Downtown Harbor Hub',
+            'dropoffLocation': 'Downtown Harbor Hub',
+            'captchaToken': 'dev-token-valid',
+        }
+        res = self.client.post('/api/public/bookings', payload, content_type='application/json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        data = res.json()
+        self.assertTrue(data['success'])
+
+        rental = Rental.objects.get(id=data['rentalId'])
+        meta = {}
+        for item in (rental.add_ons or []):
+            if isinstance(item, dict) and '__meta' in item:
+                meta = item['__meta']
+                break
+
+        self.assertEqual(meta.get('pickupLocation'), 'Downtown Harbor Hub')
+        self.assertEqual(meta.get('dropoffLocation'), 'Downtown Harbor Hub')
+
+    def test_mismatched_pickup_and_dropoff_locations_rejected(self):
+        """Attempting to specify different pickup and dropoff locations is rejected with HTTP 400."""
+        payload = {
+            'slug': 'apex-rentals',
+            'vehicleId': self.v_downtown.id,
+            'startDate': '2026-12-10T10:00:00Z',
+            'endDate': '2026-12-12T10:00:00Z',
+            'customerName': 'Split Station Guest',
+            'customerPhone': '+1 555-9988',
+            'location': 'Downtown Harbor Hub',
+            'pickupLocation': 'Downtown Harbor Hub',
+            'dropoffLocation': 'SFO Airport Terminal',
+            'captchaToken': 'dev-token-valid',
+        }
+        res = self.client.post('/api/public/bookings', payload, content_type='application/json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('identical', res.json()['error'])
+
+    def test_booking_vehicle_at_different_location_rejected(self):
+        """Attempting to book a vehicle from a location it does not belong to returns HTTP 400."""
+        # Try to book v_sfo from Downtown Harbor Hub
+        payload = {
+            'slug': 'apex-rentals',
+            'vehicleId': self.v_sfo.id,
+            'startDate': '2026-12-15T10:00:00Z',
+            'endDate': '2026-12-18T10:00:00Z',
+            'customerName': 'Wrong Hub Guest',
+            'customerPhone': '+1 555-7766',
+            'location': 'Downtown Harbor Hub',
+            'pickupLocation': 'Downtown Harbor Hub',
+            'dropoffLocation': 'Downtown Harbor Hub',
+            'captchaToken': 'dev-token-valid',
+        }
+        res = self.client.post('/api/public/bookings', payload, content_type='application/json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('assigned to', res.json()['error'])

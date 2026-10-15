@@ -674,9 +674,25 @@ export const api = {
     return res.json();
   },
 
-  async publicGetVehicles(slug: string): Promise<PublicVehicle[]> {
-    const res = await fetch(`/api/public/vehicles?slug=${encodeURIComponent(slug)}`);
-    if (!res.ok) throw new Error('Failed to fetch available fleet');
+  async publicGetVehicles(
+    slug: string,
+    filter?: { location?: string; startDate?: string; endDate?: string }
+  ): Promise<PublicVehicle[]> {
+    const params = new URLSearchParams({ slug });
+    if (filter?.location && filter.location.trim()) {
+      params.append('location', filter.location.trim());
+    }
+    if (filter?.startDate) {
+      params.append('startDate', filter.startDate);
+    }
+    if (filter?.endDate) {
+      params.append('endDate', filter.endDate);
+    }
+    const res = await fetch(`/api/public/vehicles?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch available fleet');
+    }
     return res.json();
   },
 

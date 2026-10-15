@@ -129,7 +129,7 @@ export const SignupView: React.FC<SignupViewProps> = ({
       return;
     }
 
-    if (!isCaptchaVerified && !captchaToken) {
+    if (!isCaptchaVerified || !captchaToken) {
       setGeneralError('Please complete the bot protection challenge.');
       return;
     }
@@ -144,12 +144,15 @@ export const SignupView: React.FC<SignupViewProps> = ({
         ownerEmail: ownerEmail.trim().toLowerCase(),
         password,
         confirmPassword,
-        captchaToken: captchaToken || 'dev-token'
+        captchaToken,
       });
 
       // Transition to OTP verification screen
       setVerificationPendingEmail(ownerEmail.trim().toLowerCase());
     } catch (err: any) {
+      // Single-use token reset
+      setCaptchaToken('');
+      setIsCaptchaVerified(false);
       if (err.fieldErrors && Object.keys(err.fieldErrors).length > 0) {
         setFieldErrors(err.fieldErrors);
         // Avoid displaying duplicate errors in top-level banner

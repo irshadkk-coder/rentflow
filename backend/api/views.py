@@ -8,6 +8,8 @@ from rest_framework.renderers import JSONRenderer
 from rest_framework.negotiation import DefaultContentNegotiation
 
 logger = logging.getLogger(__name__)
+import datetime
+from django.db.models import Q
 from rest_framework.throttling import ScopedRateThrottle
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -152,7 +154,18 @@ class AuthRegisterView(APIView):
         valid_data = serializer.validated_data
 
         # 3. Cloudflare Turnstile bot verification
-        captcha_token = valid_data.get('captchaToken', '')
+        captcha_token = (
+            valid_data.get('captchaToken')
+            or valid_data.get('captcha_token')
+            or valid_data.get('turnstile_token')
+            or valid_data.get('cf_turnstile_response')
+            or request.data.get('captchaToken')
+            or request.data.get('captcha_token')
+            or request.data.get('turnstileToken')
+            or request.data.get('turnstile_token')
+            or request.data.get('cf-turnstile-response')
+            or ''
+        )
         captcha_ok, captcha_msg = verify_captcha_token(captcha_token, remote_ip, is_owner_signup=True)
         if not captcha_ok:
             return Response({'error': captcha_msg}, status=status.HTTP_400_BAD_REQUEST)
@@ -554,8 +567,65 @@ class PublicVehiclesView(APIView):
         except Tenant.DoesNotExist:
             return Response({'error': 'Rental business not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        vehicles = Vehicle.objects.filter(tenant=tenant, status='available')
-        return Response(PublicVehicleSerializer(vehicles, many=True).data)
+        # 1. Base query: available vehicles belonging to tenant (exclude maintenance)
+        vehicles_qs = Vehicle.objects.filter(tenant=tenant).exclude(status='maintenance')
+
+        # 2. Location Filtering
+        raw_location = request.query_params.get('location')
+        if raw_location and str(raw_location).strip() and str(raw_location).strip().upper() != 'ALL':
+            clean_location = str(raw_location).strip()
+            # Validate location belongs to tenant
+            if not is_valid_tenant_branch(tenant, clean_location):
+                return Response(
+                    {'error': f"Invalid or inactive rental location '{clean_location}' for this business."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            valid_locations = get_tenant_locations(tenant)
+            matched_loc = next((loc for loc in valid_locations if loc.lower() == clean_location.lower()), None)
+            canonical_location = matched_loc or clean_location
+
+            is_primary = (canonical_location.lower() == valid_locations[0].lower()) if valid_locations else False
+
+            if is_primary:
+                vehicles_qs = vehicles_qs.filter(
+                    Q(images__location=canonical_location) |
+                    Q(images__location__iexact=canonical_location) |
+                    Q(images__location__isnull=True) |
+                    Q(images__location='')
+                )
+            else:
+                vehicles_qs = vehicles_qs.filter(
+                    Q(images__location=canonical_location) |
+                    Q(images__location__iexact=canonical_location)
+                )
+
+        # 3. Date Availability Filtering (Exclude vehicles with overlapping confirmed or active rentals)
+        start_date_raw = request.query_params.get('startDate')
+        end_date_raw = request.query_params.get('endDate')
+        if start_date_raw and end_date_raw:
+            try:
+                start_dt = parse_datetime(start_date_raw)
+                end_dt = parse_datetime(end_date_raw)
+                if not start_dt or not end_dt:
+                    start_dt = datetime.datetime.fromisoformat(start_date_raw.replace('Z', '+00:00'))
+                    end_dt = datetime.datetime.fromisoformat(end_date_raw.replace('Z', '+00:00'))
+            except Exception:
+                return Response({'error': 'Invalid date format provided for availability check.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if start_dt >= end_dt:
+                return Response({'error': 'Return date must be after pickup date.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            overlapping_vehicle_ids = Rental.objects.filter(
+                tenant=tenant,
+                status__in=['confirmed', 'active'],
+                start_date__lt=end_dt,
+                end_date__gt=start_dt
+            ).values_list('vehicle_id', flat=True)
+
+            vehicles_qs = vehicles_qs.exclude(id__in=overlapping_vehicle_ids)
+
+        return Response(PublicVehicleSerializer(vehicles_qs, many=True).data)
 
 
 class PublicQuoteView(APIView):
@@ -573,6 +643,37 @@ class PublicQuoteView(APIView):
             tenant = Tenant.objects.get(slug=slug)
         except Tenant.DoesNotExist:
             return Response({'error': 'Rental business not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        vehicle_id = request.data.get('vehicleId')
+        if not vehicle_id:
+            return Response({'error': 'Vehicle identifier is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            vehicle = Vehicle.objects.get(id=vehicle_id, tenant=tenant)
+        except Vehicle.DoesNotExist:
+            return Response({'error': 'Vehicle not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if vehicle.status == 'maintenance':
+            return Response({'error': 'This vehicle is currently undergoing maintenance and is not available.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Location validation
+        location = (request.data.get('location') or request.data.get('pickupLocation') or '').strip()
+        if location and location.upper() != 'ALL':
+            if not is_valid_tenant_branch(tenant, location):
+                return Response({'error': f"Invalid or inactive rental location '{location}'."}, status=status.HTTP_400_BAD_REQUEST)
+            v_loc = (vehicle.images if isinstance(vehicle.images, dict) else {}).get('location', '')
+            if v_loc and v_loc.lower() != location.lower():
+                return Response({'error': f"This vehicle is not available at '{location}'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Date conflict validation
+        start_date_str = request.data.get('startDate')
+        end_date_str = request.data.get('endDate')
+        if start_date_str and end_date_str:
+            has_conflict, conf_rent = BookingService.check_booking_conflict(vehicle.id, start_date_str, end_date_str)
+            if has_conflict:
+                c_start = conf_rent.start_date.strftime('%Y-%m-%d')
+                c_end = conf_rent.end_date.strftime('%Y-%m-%d')
+                return Response({'error': f"Vehicle is already booked from {c_start} to {c_end}.", 'conflict': True}, status=status.HTTP_409_CONFLICT)
 
         try:
             pricing = PricingService.calculate_canonical_pricing(tenant, request.data)
@@ -617,7 +718,18 @@ class PublicBookingView(APIView):
         valid_data = serializer.validated_data
 
         # 3. Bot / CAPTCHA Verification
-        captcha_token = valid_data.get('captchaToken', '')
+        captcha_token = (
+            valid_data.get('captchaToken')
+            or valid_data.get('captcha_token')
+            or valid_data.get('turnstile_token')
+            or valid_data.get('cf_turnstile_response')
+            or request.data.get('captchaToken')
+            or request.data.get('captcha_token')
+            or request.data.get('turnstileToken')
+            or request.data.get('turnstile_token')
+            or request.data.get('cf-turnstile-response')
+            or ''
+        )
         captcha_ok, captcha_msg = verify_captcha_token(captcha_token, remote_ip)
         if not captcha_ok:
             return Response({'error': captcha_msg}, status=status.HTTP_400_BAD_REQUEST)
@@ -641,6 +753,39 @@ class PublicBookingView(APIView):
         except Tenant.DoesNotExist:
             return Response({'error': 'Rental business not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # 4b. Single Rental Location Validation & Normalization
+        tenant_locations = get_tenant_locations(tenant)
+        req_location = (
+            valid_data.get('location')
+            or valid_data.get('pickupLocation')
+            or request.data.get('location')
+            or request.data.get('pickupLocation')
+            or ''
+        ).strip()
+
+        if not req_location:
+            req_location = tenant_locations[0] if tenant_locations else 'Main Station Hub'
+
+        matched_loc = next((loc for loc in tenant_locations if loc.lower() == req_location.lower()), None)
+        if not matched_loc and not is_valid_tenant_branch(tenant, req_location):
+            return Response(
+                {'error': f"Invalid or inactive rental location '{req_location}' for this business."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        canonical_location = matched_loc or req_location
+
+        # Enforce single pickup and return location
+        req_dropoff = (
+            valid_data.get('dropoffLocation')
+            or request.data.get('dropoffLocation')
+            or ''
+        ).strip()
+        if req_dropoff and req_dropoff.lower() != canonical_location.lower():
+            return Response(
+                {'error': 'Pickup and return locations must be identical.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # 5. Vehicle Scope & Availability (Scoped strictly to tenant)
         vehicle_id = valid_data.get('vehicleId')
         try:
@@ -650,6 +795,14 @@ class PublicBookingView(APIView):
 
         if vehicle.status == 'maintenance':
             return Response({'error': 'This vehicle is currently undergoing maintenance and is not available.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify vehicle belongs to the selected location
+        v_loc = (vehicle.images if isinstance(vehicle.images, dict) else {}).get('location', '')
+        if v_loc and v_loc.strip().lower() != canonical_location.lower():
+            return Response(
+                {'error': f"This vehicle is assigned to '{v_loc}' and cannot be rented from '{canonical_location}'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         start_dt = parse_datetime(valid_data['startDate'])
         end_dt = parse_datetime(valid_data['endDate'])
@@ -683,6 +836,9 @@ class PublicBookingView(APIView):
         # 7. Server-Authoritative Pricing & Sanitization
         clean_payload = dict(valid_data)
         clean_payload['status'] = 'confirmed'
+        clean_payload['location'] = canonical_location
+        clean_payload['pickupLocation'] = canonical_location
+        clean_payload['dropoffLocation'] = canonical_location
         for forbidden in ['id', 'rentalNumber', 'dailyRate', 'totalAmount', 'depositAmount', 'balanceDue', 'tax', 'customerId', 'captchaToken']:
             clean_payload.pop(forbidden, None)
 

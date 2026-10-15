@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Sparkles,
-  ArrowLeft,
   AlertCircle,
   CreditCard,
   UserCheck,
@@ -25,7 +24,7 @@ import { BotVerification } from './BotVerification.js';
 
 interface PublicBookingViewProps {
   currentTenant: Tenant;
-  onBackToConsole: () => void;
+  onBackToConsole?: () => void;
 }
 
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
@@ -50,7 +49,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     d.setHours(10, 0, 0, 0);
     return d.toISOString().slice(0, 16);
   });
-  const [pickupLocation, setPickupLocation] = useState<string>(currentTenant.locations[0] || 'Main Station');
+  const [selectedLocation, setSelectedLocation] = useState<string>(currentTenant.locations[0] || '');
   const [insuranceTier, setInsuranceTier] = useState<'none' | 'basic' | 'premium'>('basic');
   const [selectedAddOns, setSelectedAddOns] = useState<string[]>([]);
 
@@ -76,21 +75,49 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<any | null>(null);
 
-  // Load public catalog
+  // Load public catalog filtered by selected location and dates
   useEffect(() => {
+    if (!selectedLocation) {
+      setVehicles([]);
+      setLoading(false);
+      return;
+    }
+
+    const start = new Date(pickupDate).getTime();
+    const end = new Date(returnDate).getTime();
+    if (isNaN(start) || isNaN(end) || start >= end) {
+      return;
+    }
+
+    let isMounted = true;
     async function loadCatalog() {
       setLoading(true);
       try {
-        const list = await api.publicGetVehicles(currentTenant.slug);
-        setVehicles(list);
-      } catch (err) {
+        const list = await api.publicGetVehicles(currentTenant.slug, {
+          location: selectedLocation,
+          startDate: new Date(pickupDate).toISOString(),
+          endDate: new Date(returnDate).toISOString(),
+        });
+        if (isMounted) {
+          setVehicles(list);
+          if (selectedVehicle && !list.some(v => v.id === selectedVehicle.id)) {
+            setSelectedVehicle(null);
+          }
+        }
+      } catch (err: any) {
         console.error('Failed to load public fleet:', err);
+        if (isMounted) {
+          setVehicles([]);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     }
     loadCatalog();
-  }, [currentTenant.slug]);
+    return () => {
+      isMounted = false;
+    };
+  }, [currentTenant.slug, selectedLocation, pickupDate, returnDate]);
 
   // Recalculate quote whenever dates, vehicle, insurance, or addons change
   useEffect(() => {
@@ -110,8 +137,10 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
           endDate: new Date(returnDate).toISOString(),
           rentalRateType: 'daily',
           insuranceTier,
-          addOnIds: selectedAddOns
-        });
+          addOnIds: selectedAddOns,
+          location: selectedLocation,
+          pickupLocation: selectedLocation
+        } as any);
         setQuote(res);
       } catch (err: any) {
         setErrorMessage(err.message || 'Unable to calculate quote for selected dates.');
@@ -129,7 +158,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
       setErrorMessage('Return date must be after pickup date.');
       setQuote(null);
     }
-  }, [selectedVehicle, pickupDate, returnDate, insuranceTier, selectedAddOns, currentTenant.slug]);
+  }, [selectedVehicle, pickupDate, returnDate, insuranceTier, selectedAddOns, currentTenant.slug, selectedLocation]);
 
   const handleSelectVehicle = (v: PublicVehicle) => {
     setSelectedVehicle(v);
@@ -195,18 +224,21 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         customerPhone: customerPhone.trim(),
         customerAddress: customerAddress.trim() || undefined,
         driverLicenseNumber: driverLicenseNumber.trim() || undefined,
-        pickupLocation,
-        dropoffLocation: pickupLocation,
+        location: selectedLocation,
+        pickupLocation: selectedLocation,
+        dropoffLocation: selectedLocation,
         captchaToken,
       });
 
       setConfirmation(res);
       setSelectedVehicle(null);
       setCaptchaToken('');
-      setIsBotVerified(false);
     } catch (err: any) {
       // Keep customer form values intact on error!
       setErrorMessage(err.message || 'Failed to submit reservation.');
+      // Cloudflare Turnstile tokens are strictly single-use; reset so user gets a fresh challenge
+      setCaptchaToken('');
+      setIsBotVerified(false);
     } finally {
       setBookingSubmitting(false);
     }
@@ -219,23 +251,6 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Top Banner indicating preview mode with switch back to console */}
-      <div className="bg-slate-900 text-slate-300 px-4 py-2 text-xs flex items-center justify-between border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="font-semibold text-white">Public Customer Storefront Preview</span>
-          <span className="text-slate-400 hidden sm:inline">— Guest reservation flow for /rent/{currentTenant.slug}</span>
-        </div>
-        <button
-          id="back-to-console-btn"
-          onClick={onBackToConsole}
-          className="flex items-center gap-1.5 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-semibold rounded-lg border border-slate-700 transition-colors cursor-pointer"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Return to Staff Console</span>
-        </button>
-      </div>
-
       {/* Public Storefront Header */}
       <header className="bg-white border-b border-slate-200 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -315,17 +330,84 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   >
                     Book Another Trip
                   </button>
-                  <button
-                    onClick={onBackToConsole}
-                    className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all cursor-pointer"
-                  >
-                    Inspect in Dispatch CRM
-                  </button>
+                  {onBackToConsole && (
+                    <button
+                      onClick={onBackToConsole}
+                      className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all cursor-pointer"
+                    >
+                      Inspect in Dispatch CRM
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* Unified Rental Location & Date Bar */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs mb-8">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+            {/* Rental Location */}
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Rental Location (Pickup & Return)</span>
+              </label>
+              <select
+                id="storefront-rental-location"
+                value={selectedLocation}
+                onChange={(e) => {
+                  setSelectedLocation(e.target.value);
+                  setSelectedVehicle(null);
+                }}
+                className="w-full px-3 py-2.5 bg-slate-50 hover:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 transition-all focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+              >
+                <option value="">Select a rental location...</option>
+                {currentTenant.locations.map((loc) => (
+                  <option key={loc} value={loc}>
+                    {loc}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Pickup Date & Time */}
+            <div className="w-full lg:w-56">
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Pickup Date & Time</span>
+              </label>
+              <input
+                type="datetime-local"
+                value={pickupDate}
+                onChange={(e) => {
+                  setPickupDate(e.target.value);
+                }}
+                className="w-full px-3 py-2.5 bg-slate-50 hover:bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-900 transition-all focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Return Date & Time */}
+            <div className="w-full lg:w-56">
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Return Date & Time</span>
+              </label>
+              <input
+                type="datetime-local"
+                value={returnDate}
+                onChange={(e) => {
+                  setReturnDate(e.target.value);
+                }}
+                className="w-full px-3 py-2.5 bg-slate-50 hover:bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-900 transition-all focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-slate-100 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span>Vehicles are assigned to specific station hubs and return to the same location. Live availability updates automatically based on your selected dates.</span>
+          </p>
+        </div>
 
         {/* Fleet Filtering Strip */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
@@ -353,13 +435,19 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
 
         {/* Fleet Grid */}
-        {loading ? (
-          <div className="py-20 text-center text-slate-400 text-xs">Loading available vehicles...</div>
+        {!selectedLocation ? (
+          <div className="py-16 text-center bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+            <MapPin className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-700">Please select a rental location above to view available vehicles.</p>
+            <p className="text-xs text-slate-400 mt-1">Vehicles are assigned to specific locations and filtered for your trip dates.</p>
+          </div>
+        ) : loading ? (
+          <div className="py-20 text-center text-slate-400 text-xs">Checking live fleet availability for selected location & dates...</div>
         ) : filteredVehicles.length === 0 ? (
-          <div className="py-20 text-center bg-white rounded-2xl border border-slate-200 p-8">
+          <div className="py-16 text-center bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
             <Car className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-slate-700">No vehicles available in this category</p>
-            <p className="text-xs text-slate-400 mt-1">Please select another category or contact station dispatch.</p>
+            <p className="text-sm font-semibold text-slate-700">No vehicles available at this location for the selected dates.</p>
+            <p className="text-xs text-slate-400 mt-1">Try adjusting your rental dates or choosing another rental location.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -391,6 +479,10 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                     <p className="text-xs text-slate-500 mt-0.5">
                       {vehicle.year} • {vehicle.transmission} • {vehicle.seats} Seats • {vehicle.color}
                     </p>
+                    <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-medium mt-1">
+                      <MapPin className="w-3 h-3 flex-shrink-0" />
+                      <span>{vehicle.location || selectedLocation}</span>
+                    </div>
 
                     {/* Features */}
                     <div className="flex flex-wrap gap-1.5 mt-3">
@@ -482,16 +574,22 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Pickup & Return Station</label>
-                  <select
-                    value={pickupLocation}
-                    onChange={(e) => setPickupLocation(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium"
-                  >
-                    {currentTenant.locations.map(loc => (
-                      <option key={loc} value={loc}>{loc}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Rental Location (Pickup & Return)</span>
+                    <span className="text-[10px] text-emerald-700 font-medium">Single Location</span>
+                  </label>
+                  <div className="w-full px-3 py-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <span>{selectedLocation}</span>
+                    </div>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                      Pickup & Return
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Vehicle is picked up and must be returned to this station hub.
+                  </p>
                 </div>
               </div>
 
@@ -673,7 +771,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={bookingSubmitting || !quote}
+                  disabled={bookingSubmitting || !quote || !isBotVerified}
                   className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                 >
                   <CreditCard className="w-4 h-4" />

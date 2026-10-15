@@ -15,8 +15,14 @@ if env_path.exists():
 # Environment & Debug settings
 if 'DJANGO_DEBUG' in os.environ:
     DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() == 'true'
+elif 'DEBUG' in os.environ:
+    DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+elif os.environ.get('RENDER') == 'true' or os.environ.get('RENDER') == '1':
+    DEBUG = False
+elif os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('NODE_ENV') == 'production':
+    DEBUG = False
 else:
-    DEBUG = os.environ.get('NODE_ENV') != 'production'
+    DEBUG = True
 
 # Demo Persona / Switcher Configuration
 # In production (DEBUG=False), demo mode is strictly disabled regardless of env variables.
@@ -45,8 +51,18 @@ else:
         raise ImproperlyConfigured('JWT_SECRET is required. Please set it in your .env file or environment.')
 
 # Turnstile / Bot Protection Configuration
-TURNSTILE_SITE_KEY = os.environ.get('TURNSTILE_SITE_KEY', '')
-TURNSTILE_SECRET_KEY = os.environ.get('TURNSTILE_SECRET_KEY', '')
+TURNSTILE_SITE_KEY = (
+    os.environ.get('TURNSTILE_SITE_KEY')
+    or os.environ.get('CLOUDFLARE_TURNSTILE_SITE_KEY')
+    or os.environ.get('CF_TURNSTILE_SITE_KEY')
+    or ''
+)
+TURNSTILE_SECRET_KEY = (
+    os.environ.get('TURNSTILE_SECRET_KEY')
+    or os.environ.get('CLOUDFLARE_TURNSTILE_SECRET_KEY')
+    or os.environ.get('CF_TURNSTILE_SECRET_KEY')
+    or ''
+)
 
 # Allowed Hosts
 raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS')

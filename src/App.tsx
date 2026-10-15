@@ -727,14 +727,10 @@ export default function App() {
     return (
       <PublicBookingView
         currentTenant={currentTenant}
-        onBackToConsole={() => {
-          if (currentUser) {
-            handleNavigateTab('dashboard');
-            fetchTenantData(currentTenantId);
-          } else {
-            navigate('/login');
-          }
-        }}
+        onBackToConsole={currentUser ? () => {
+          handleNavigateTab('dashboard');
+          fetchTenantData(currentTenantId);
+        } : undefined}
       />
     );
   }
