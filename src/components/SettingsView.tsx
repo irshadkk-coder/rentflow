@@ -25,6 +25,13 @@ import { Tenant, User, Branch } from '../types.js';
 import { TeamManagementView } from './TeamManagementView.js';
 import { api } from '../lib/api.js';
 import { MapLocationPickerModal, SelectedLocationData } from './MapLocationPickerModal.js';
+import {
+  parseLatitude,
+  parseLongitude,
+  formatLatitude,
+  formatLongitude
+} from '../lib/coordinates.js';
+import { ErrorBoundary } from './ErrorBoundary.js';
 
 interface SettingsViewProps {
   tenant: Tenant;
@@ -104,7 +111,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return next;
     });
 
-    showToast(`Coordinates selected from map: ${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`);
+    const latFormatted = formatLatitude(loc.latitude, 4);
+    const lngFormatted = formatLongitude(loc.longitude, 4);
+    if (latFormatted && lngFormatted) {
+      showToast(`Coordinates selected from map: ${latFormatted}, ${lngFormatted}`);
+    } else {
+      showToast('Coordinates selected from map.');
+    }
   };
 
   const fetchBranches = useCallback(async () => {
@@ -147,13 +160,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleOpenEditBranch = (branch: Branch) => {
     setEditingBranch(branch);
+    const parsedLat = parseLatitude(branch.latitude);
+    const parsedLng = parseLongitude(branch.longitude);
     setBranchForm({
       name: branch.name,
       address: branch.address,
       city: branch.city,
       pincode: branch.pincode,
-      latitude: String(branch.latitude),
-      longitude: String(branch.longitude),
+      latitude: parsedLat !== null ? String(parsedLat) : (branch.latitude != null ? String(branch.latitude) : ''),
+      longitude: parsedLng !== null ? String(parsedLng) : (branch.longitude != null ? String(branch.longitude) : ''),
       phone: branch.phone || branch.contactNumber || '',
       is_active: branch.isActive ?? branch.is_active ?? true
     });
@@ -168,13 +183,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!branchForm.city.trim()) errors.city = 'City is required';
     if (!branchForm.pincode.trim()) errors.pincode = 'Pincode / Postal code is required';
 
-    const lat = parseFloat(branchForm.latitude);
-    if (isNaN(lat) || lat < -90 || lat > 90) {
+    const lat = parseLatitude(branchForm.latitude);
+    if (lat === null) {
       errors.latitude = 'Latitude must be a valid number between -90 and 90';
     }
 
-    const lng = parseFloat(branchForm.longitude);
-    if (isNaN(lng) || lng < -180 || lng > 180) {
+    const lng = parseLongitude(branchForm.longitude);
+    if (lng === null) {
       errors.longitude = 'Longitude must be a valid number between -180 and 180';
     }
 
@@ -190,13 +205,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     setBranchFormSubmitting(true);
     try {
+      const validLat = parseLatitude(branchForm.latitude);
+      const validLng = parseLongitude(branchForm.longitude);
+
       const payload: Partial<Branch> = {
         name: branchForm.name.trim(),
         address: branchForm.address.trim(),
         city: branchForm.city.trim(),
         pincode: branchForm.pincode.trim(),
-        latitude: parseFloat(branchForm.latitude),
-        longitude: parseFloat(branchForm.longitude),
+        latitude: validLat !== null ? validLat : parseFloat(branchForm.latitude),
+        longitude: validLng !== null ? validLng : parseFloat(branchForm.longitude),
         phone: branchForm.phone.trim(),
         isActive: branchForm.is_active,
         is_active: branchForm.is_active
@@ -465,151 +483,167 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {/* Station Locations & Hubs (Branch Management) */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                <MapPin className="w-4 h-4 text-emerald-600" />
-                <span>Station Locations & Branches</span>
+        <ErrorBoundary fallbackTitle="Station Locations & Branches" fallbackMessage="Could not render station locations. Other business settings remain available.">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <MapPin className="w-4 h-4 text-emerald-600" />
+                  <span>Station Locations & Branches</span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Manage physical rental hubs, geographic coordinates for customer proximity search, and active operating status.
+                </p>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Manage physical rental hubs, geographic coordinates for customer proximity search, and active operating status.
-              </p>
-            </div>
 
-            {isOwner && (
-              <button
-                type="button"
-                id="add-branch-modal-btn"
-                onClick={handleOpenAddBranch}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer self-start sm:self-auto"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Branch</span>
-              </button>
-            )}
-          </div>
-
-          {isLoadingBranches ? (
-            <div className="p-6 text-center text-xs text-slate-400">Loading branches...</div>
-          ) : branches.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              {branches.map((b) => {
-                const isActive = b.isActive ?? b.is_active ?? true;
-                return (
-                  <div
-                    key={b.id}
-                    className={`p-3.5 rounded-xl border transition-all ${
-                      isActive
-                        ? 'bg-slate-50/70 border-slate-200 hover:border-emerald-300'
-                        : 'bg-slate-100/50 border-slate-200/70 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 text-xs truncate">{b.name}</span>
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                              isActive
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-200 text-slate-600'
-                            }`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-600' : 'bg-slate-400'}`} />
-                            {isActive ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{b.address}</p>
-                        <p className="text-[11px] text-slate-500">
-                          {b.city}{b.pincode ? `, ${b.pincode}` : ''}
-                        </p>
-                      </div>
-
-                      {isOwner && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditBranch(b)}
-                            title="Edit Branch"
-                            className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-white rounded-lg border border-transparent hover:border-slate-200 transition-colors"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleBranchActive(b)}
-                            title={isActive ? 'Deactivate Branch' : 'Activate Branch'}
-                            className={`p-1.5 rounded-lg border border-transparent transition-colors ${
-                              isActive
-                                ? 'text-slate-500 hover:text-rose-600 hover:bg-rose-50 hover:border-rose-200'
-                                : 'text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200'
-                            }`}
-                          >
-                            <Power className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                  <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
-                    <div className="flex items-center gap-1">
-                      <Phone className="w-3 h-3 text-slate-400" />
-                      <span>{b.phone || b.contactNumber || 'No phone'}</span>
-                    </div>
-
-                    <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${b.latitude},${b.longitude}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 font-mono text-[10px] text-emerald-700 hover:underline"
-                    >
-                      <Navigation className="w-3 h-3 text-emerald-600" />
-                      <span>{b.latitude.toFixed(4)}, {b.longitude.toFixed(4)}</span>
-                      <ExternalLink className="w-2.5 h-2.5 opacity-70" />
-                    </a>
-                  </div>
-                </div>
-              );
-            })}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {locations.map((loc, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
-                  <span className="font-semibold text-slate-800">{loc}</span>
-                  {locations.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveLocation(idx)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-
-              <div className="flex gap-2 pt-2">
-                <input
-                  type="text"
-                  value={newLocation}
-                  onChange={(e) => setNewLocation(e.target.value)}
-                  placeholder="e.g. Marina District Station or Pier 39 Depot..."
-                  className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                />
+              {isOwner && (
                 <button
                   type="button"
-                  onClick={handleAddLocation}
-                  className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                  id="add-branch-modal-btn"
+                  onClick={handleOpenAddBranch}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer self-start sm:self-auto"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Add Station</span>
+                  <span>Add Branch</span>
                 </button>
-              </div>
+              )}
             </div>
-          )}
-        </div>
+
+            {isLoadingBranches ? (
+              <div className="p-6 text-center text-xs text-slate-400">Loading branches...</div>
+            ) : branches.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {branches.map((b) => {
+                  const isActive = b.isActive ?? b.is_active ?? true;
+                  return (
+                    <div
+                      key={b.id}
+                      className={`p-3.5 rounded-xl border transition-all ${
+                        isActive
+                          ? 'bg-slate-50/70 border-slate-200 hover:border-emerald-300'
+                          : 'bg-slate-100/50 border-slate-200/70 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-xs truncate">{b.name}</span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
+                                isActive
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-200 text-slate-600'
+                              }`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-600' : 'bg-slate-400'}`} />
+                              {isActive ? 'Active' : 'Inactive'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{b.address}</p>
+                          <p className="text-[11px] text-slate-500">
+                            {b.city}{b.pincode ? `, ${b.pincode}` : ''}
+                          </p>
+                        </div>
+
+                        {isOwner && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditBranch(b)}
+                              title="Edit Branch"
+                              className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-white rounded-lg border border-transparent hover:border-slate-200 transition-colors"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleBranchActive(b)}
+                              title={isActive ? 'Deactivate Branch' : 'Activate Branch'}
+                              className={`p-1.5 rounded-lg border border-transparent transition-colors ${
+                                isActive
+                                  ? 'text-slate-500 hover:text-rose-600 hover:bg-rose-50 hover:border-rose-200'
+                                  : 'text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200'
+                              }`}
+                            >
+                              <Power className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
+                      <div className="flex items-center gap-1">
+                        <Phone className="w-3 h-3 text-slate-400" />
+                        <span>{b.phone || b.contactNumber || 'No phone'}</span>
+                      </div>
+
+                      {(() => {
+                        const latStr = formatLatitude(b.latitude, 4);
+                        const lngStr = formatLongitude(b.longitude, 4);
+                        if (latStr !== null && lngStr !== null) {
+                          return (
+                            <a
+                              href={`https://www.google.com/maps/search/?api=1&query=${latStr},${lngStr}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 font-mono text-[10px] text-emerald-700 hover:underline"
+                            >
+                              <Navigation className="w-3 h-3 text-emerald-600" />
+                              <span>{latStr}, {lngStr}</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+                            </a>
+                          );
+                        }
+                        return (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-400 italic">
+                            <MapPin className="w-3 h-3 text-slate-300" />
+                            <span>Coordinates unconfigured</span>
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                );
+              })}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {locations.map((loc, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                    <span className="font-semibold text-slate-800">{loc}</span>
+                    {locations.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveLocation(idx)}
+                        className="text-slate-400 hover:text-rose-600 p-1"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                <div className="flex gap-2 pt-2">
+                  <input
+                    type="text"
+                    value={newLocation}
+                    onChange={(e) => setNewLocation(e.target.value)}
+                    placeholder="e.g. Marina District Station or Pier 39 Depot..."
+                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddLocation}
+                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Station</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </ErrorBoundary>
 
         {/* Add / Edit Branch Modal Dialog */}
         {isBranchModalOpen && (
@@ -835,8 +869,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           isOpen={isMapPickerOpen}
           onClose={() => setIsMapPickerOpen(false)}
           onConfirm={handleMapLocationConfirm}
-          initialLat={branchForm.latitude ? parseFloat(branchForm.latitude) : undefined}
-          initialLng={branchForm.longitude ? parseFloat(branchForm.longitude) : undefined}
+          initialLat={parseLatitude(branchForm.latitude) ?? undefined}
+          initialLng={parseLongitude(branchForm.longitude) ?? undefined}
           initialAddress={branchForm.address || branchForm.city || undefined}
           branchName={branchForm.name || undefined}
         />

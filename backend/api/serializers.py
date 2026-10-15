@@ -903,6 +903,8 @@ class AuditLogSerializer(serializers.ModelSerializer):
 class BranchSerializer(serializers.ModelSerializer):
     tenantId = serializers.CharField(source='tenant_id', read_only=True)
     isActive = serializers.BooleanField(source='is_active', required=False, default=True)
+    latitude = serializers.FloatField(required=True)
+    longitude = serializers.FloatField(required=True)
 
     class Meta:
         model = Branch
@@ -950,25 +952,38 @@ class BranchSerializer(serializers.ModelSerializer):
         return val
 
     def validate_latitude(self, value):
+        if value is None:
+            raise serializers.ValidationError("Latitude is required.")
         try:
             val = float(value)
         except (ValueError, TypeError):
             raise serializers.ValidationError("Latitude must be a valid number.")
+        import math
+        if math.isnan(val) or math.isinf(val):
+            raise serializers.ValidationError("Latitude must be a finite number.")
         if val < -90.0 or val > 90.0:
             raise serializers.ValidationError("Latitude must be between -90 and 90 degrees.")
         return round(val, 6)
 
     def validate_longitude(self, value):
+        if value is None:
+            raise serializers.ValidationError("Longitude is required.")
         try:
             val = float(value)
         except (ValueError, TypeError):
             raise serializers.ValidationError("Longitude must be a valid number.")
+        import math
+        if math.isnan(val) or math.isinf(val):
+            raise serializers.ValidationError("Longitude must be a finite number.")
         if val < -180.0 or val > 180.0:
             raise serializers.ValidationError("Longitude must be between -180 and 180 degrees.")
         return round(val, 6)
 
 
 class PublicBranchSerializer(serializers.ModelSerializer):
+    latitude = serializers.FloatField(read_only=True)
+    longitude = serializers.FloatField(read_only=True)
+
     class Meta:
         model = Branch
         fields = [

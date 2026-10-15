@@ -19,6 +19,7 @@ import {
   Branch,
   PublicBranch
 } from '../types.js';
+import { parseLatitude, parseLongitude } from './coordinates.js';
 
 const TOKEN_KEY = 'rentflow_jwt_token';
 const USER_KEY = 'rentflow_auth_user';
@@ -748,7 +749,17 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to fetch public branches');
     }
-    return res.json();
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map((b: any) => {
+      const lat = parseLatitude(b.latitude);
+      const lng = parseLongitude(b.longitude);
+      return {
+        ...b,
+        latitude: lat !== null ? lat : b.latitude,
+        longitude: lng !== null ? lng : b.longitude
+      };
+    });
   },
 
   // ----------------------------------------------------
@@ -761,7 +772,20 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to fetch branches');
     }
-    return res.json();
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map((b: any) => {
+      const lat = parseLatitude(b.latitude);
+      const lng = parseLongitude(b.longitude);
+      return {
+        ...b,
+        latitude: lat !== null ? lat : b.latitude,
+        longitude: lng !== null ? lng : b.longitude,
+        isActive: b.isActive ?? b.is_active ?? true,
+        is_active: b.isActive ?? b.is_active ?? true,
+        phone: b.phone || b.contactNumber || ''
+      };
+    });
   },
 
   async createBranch(payload: Partial<Branch>): Promise<Branch> {
@@ -777,7 +801,16 @@ export const api = {
       }
       throw new Error(msg);
     }
-    return res.json();
+    const data = await res.json();
+    const lat = parseLatitude(data.latitude);
+    const lng = parseLongitude(data.longitude);
+    return {
+      ...data,
+      latitude: lat !== null ? lat : data.latitude,
+      longitude: lng !== null ? lng : data.longitude,
+      isActive: data.isActive ?? data.is_active ?? true,
+      is_active: data.isActive ?? data.is_active ?? true
+    };
   },
 
   async updateBranch(id: string, payload: Partial<Branch>): Promise<Branch> {
@@ -793,7 +826,16 @@ export const api = {
       }
       throw new Error(msg);
     }
-    return res.json();
+    const data = await res.json();
+    const lat = parseLatitude(data.latitude);
+    const lng = parseLongitude(data.longitude);
+    return {
+      ...data,
+      latitude: lat !== null ? lat : data.latitude,
+      longitude: lng !== null ? lng : data.longitude,
+      isActive: data.isActive ?? data.is_active ?? true,
+      is_active: data.isActive ?? data.is_active ?? true
+    };
   },
 
   async deactivateBranch(id: string): Promise<{ success: boolean; message: string; branch: Branch }> {

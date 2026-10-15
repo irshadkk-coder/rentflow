@@ -13,6 +13,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { PublicBranch } from '../types.js';
+import { parseLatitude, parseLongitude } from '../lib/coordinates.js';
 
 interface NearbyBranchesModalProps {
   isOpen: boolean;
@@ -59,12 +60,16 @@ export const NearbyBranchesModal: React.FC<NearbyBranchesModalProps> = ({
     return branches.map((b) => {
       let distanceKm: number | undefined = undefined;
       if (userCoords) {
-        distanceKm = calculateHaversineDistanceKm(
-          userCoords.latitude,
-          userCoords.longitude,
-          Number(b.latitude),
-          Number(b.longitude)
-        );
+        const bLat = parseLatitude(b.latitude);
+        const bLng = parseLongitude(b.longitude);
+        if (bLat !== null && bLng !== null) {
+          distanceKm = calculateHaversineDistanceKm(
+            userCoords.latitude,
+            userCoords.longitude,
+            bLat,
+            bLng
+          );
+        }
       }
       return {
         ...b,
@@ -237,7 +242,12 @@ export const NearbyBranchesModal: React.FC<NearbyBranchesModalProps> = ({
           ) : (
             filteredAndSortedBranches.map((branch) => {
               const isSelected = selectedBranchName.toLowerCase() === branch.name.toLowerCase();
-              const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${branch.latitude},${branch.longitude}`;
+              const bLat = parseLatitude(branch.latitude);
+              const bLng = parseLongitude(branch.longitude);
+              const directionsUrl =
+                bLat !== null && bLng !== null
+                  ? `https://www.google.com/maps/dir/?api=1&destination=${bLat},${bLng}`
+                  : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${branch.name}, ${branch.address}, ${branch.city}`)}`;
 
               return (
                 <div

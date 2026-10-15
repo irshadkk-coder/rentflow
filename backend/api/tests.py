@@ -5561,3 +5561,97 @@ class LocationAwareBranchTestSuite(TestCase):
         avail_ids = [v['id'] for v in res_avail.json()]
         self.assertNotIn(v_downtown['id'], avail_ids)
 
+    def test_coordinate_numeric_and_string_serialization(self):
+        """Branch API accepts float and numeric string coordinates and serializes them as floats."""
+        # 1. Test numeric float
+        payload_float = {
+            'name': 'Float Coordinates Hub',
+            'address': '200 Market St',
+            'city': 'San Francisco',
+            'pincode': '94105',
+            'latitude': 37.7937,
+            'longitude': -122.3965,
+            'isActive': True
+        }
+        res_float = self.client.post('/api/branches', payload_float, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res_float.status_code, status.HTTP_201_CREATED)
+        data_float = res_float.json()
+        self.assertIsInstance(data_float['latitude'], float)
+        self.assertIsInstance(data_float['longitude'], float)
+        self.assertAlmostEqual(data_float['latitude'], 37.7937, places=4)
+        self.assertAlmostEqual(data_float['longitude'], -122.3965, places=4)
+
+        # 2. Test numeric string input
+        payload_str = {
+            'name': 'String Coordinates Hub',
+            'address': '300 Mission St',
+            'city': 'San Francisco',
+            'pincode': '94105',
+            'latitude': '37.7912',
+            'longitude': '-122.3980',
+            'isActive': True
+        }
+        res_str = self.client.post('/api/branches', payload_str, content_type='application/json', **self.auth_owner1)
+        self.assertEqual(res_str.status_code, status.HTTP_201_CREATED)
+        data_str = res_str.json()
+        self.assertIsInstance(data_str['latitude'], float)
+        self.assertIsInstance(data_str['longitude'], float)
+        self.assertAlmostEqual(data_str['latitude'], 37.7912, places=4)
+        self.assertAlmostEqual(data_str['longitude'], -122.3980, places=4)
+
+        # 3. GET /api/branches returns list with float coordinates
+        res_list = self.client.get('/api/branches', **self.auth_owner1)
+        self.assertEqual(res_list.status_code, status.HTTP_200_OK)
+        for b in res_list.json():
+            self.assertIsInstance(b['latitude'], float)
+            self.assertIsInstance(b['longitude'], float)
+            self.assertTrue(-90.0 <= b['latitude'] <= 90.0)
+            self.assertTrue(-180.0 <= b['longitude'] <= 180.0)
+
+    def test_coordinate_edge_case_and_invalid_values(self):
+        """Comprehensive coordinate validation: out of bounds, missing, NaN, empty strings."""
+        base_payload = {
+            'name': 'Validation Hub',
+            'address': '100 Test St',
+            'city': 'Testville',
+            'pincode': '12345',
+        }
+
+        invalid_cases = [
+            # Out of bounds latitude
+            ({'latitude': 90.0001, 'longitude': 0.0}, 'latitude'),
+            ({'latitude': -90.0001, 'longitude': 0.0}, 'latitude'),
+            ({'latitude': '95.0', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': '-95.0', 'longitude': 0.0}, 'latitude'),
+            # Out of bounds longitude
+            ({'latitude': 0.0, 'longitude': 180.0001}, 'longitude'),
+            ({'latitude': 0.0, 'longitude': -180.0001}, 'longitude'),
+            ({'latitude': 0.0, 'longitude': '190.0'}, 'longitude'),
+            ({'latitude': 0.0, 'longitude': '-190.0'}, 'longitude'),
+            # Non-numeric / NaN
+            ({'latitude': 'NaN', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': 'Infinity', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': '-Infinity', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': 'invalid-lat', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': 0.0, 'longitude': 'invalid-lng'}, 'longitude'),
+            # Empty strings
+            ({'latitude': '', 'longitude': 0.0}, 'latitude'),
+            ({'latitude': 0.0, 'longitude': ''}, 'longitude'),
+            # Null values
+            ({'latitude': None, 'longitude': 0.0}, 'latitude'),
+            ({'latitude': 0.0, 'longitude': None}, 'longitude'),
+            # Missing fields
+            ({'longitude': 0.0}, 'latitude'),
+            ({'latitude': 0.0}, 'longitude'),
+        ]
+
+        for coords, err_field in invalid_cases:
+            payload = {**base_payload, **coords}
+            res = self.client.post('/api/branches', payload, content_type='application/json', **self.auth_owner1)
+            self.assertEqual(
+                res.status_code,
+                status.HTTP_400_BAD_REQUEST,
+                f"Expected 400 for coords {coords}, got {res.status_code}: {res.content}"
+            )
+
+

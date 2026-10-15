@@ -109,7 +109,11 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                       </div>
                       <div className="flex items-center gap-1 text-amber-500 text-xs mt-0.5">
                         <Star className="w-3.5 h-3.5 fill-amber-400" />
-                        <span className="font-bold text-slate-700">{customer.rating.toFixed(1)}</span>
+                        <span className="font-bold text-slate-700">
+                          {typeof customer.rating === 'number' && !isNaN(customer.rating)
+                            ? customer.rating.toFixed(1)
+                            : (Number(customer.rating) || 5.0).toFixed(1)}
+                        </span>
                         <span className="text-slate-400 text-[10px] ml-1">
                           ({customer.totalRentals} Completed Trips)
                         </span>

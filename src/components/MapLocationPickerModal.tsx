@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Compass
 } from 'lucide-react';
+import { parseLatitude, parseLongitude, formatLatitude, formatLongitude } from '../lib/coordinates.js';
 
 // Configure crisp custom Leaflet emerald marker icon
 const branchPinIcon = L.divIcon({
@@ -75,8 +76,8 @@ interface MapLocationPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (location: SelectedLocationData) => void;
-  initialLat?: number;
-  initialLng?: number;
+  initialLat?: number | string | null;
+  initialLng?: number | string | null;
   initialAddress?: string;
   branchName?: string;
 }
@@ -124,22 +125,15 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
   // Fallback default coordinates: San Francisco center if none provided
   const defaultCenter: [number, number] = [37.7749, -122.4194];
 
-  const hasValidInitial =
-    typeof initialLat === 'number' &&
-    !isNaN(initialLat) &&
-    initialLat >= -90 &&
-    initialLat <= 90 &&
-    typeof initialLng === 'number' &&
-    !isNaN(initialLng) &&
-    initialLng >= -180 &&
-    initialLng <= 180 &&
-    (initialLat !== 0 || initialLng !== 0);
+  const parsedInitLat = parseLatitude(initialLat);
+  const parsedInitLng = parseLongitude(initialLng);
+  const hasValidInitial = parsedInitLat !== null && parsedInitLng !== null;
 
   const [selectedCoords, setSelectedCoords] = useState<[number, number]>(
-    hasValidInitial ? [initialLat!, initialLng!] : defaultCenter
+    hasValidInitial ? [parsedInitLat, parsedInitLng] : defaultCenter
   );
   const [mapCenter, setMapCenter] = useState<[number, number]>(
-    hasValidInitial ? [initialLat!, initialLng!] : defaultCenter
+    hasValidInitial ? [parsedInitLat, parsedInitLng] : defaultCenter
   );
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -161,8 +155,8 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       if (hasValidInitial) {
-        setSelectedCoords([initialLat!, initialLng!]);
-        setMapCenter([initialLat!, initialLng!]);
+        setSelectedCoords([parsedInitLat, parsedInitLng]);
+        setMapCenter([parsedInitLat, parsedInitLng]);
       } else {
         setSelectedCoords(defaultCenter);
         setMapCenter(defaultCenter);
@@ -172,7 +166,7 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
       setSearchError(null);
       setDetectedAddress(null);
     }
-  }, [isOpen, initialLat, initialLng, initialAddress]);
+  }, [isOpen, parsedInitLat, parsedInitLng, initialAddress, hasValidInitial]);
 
   // Reverse geocode when marker is placed/moved (throttled/on demand)
   const reverseGeocode = useCallback(async (lat: number, lon: number) => {
@@ -211,18 +205,26 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
   }, []);
 
   const handleMapClick = (lat: number, lng: number) => {
-    const newCoords: [number, number] = [Number(lat.toFixed(6)), Number(lng.toFixed(6))];
-    setSelectedCoords(newCoords);
-    reverseGeocode(newCoords[0], newCoords[1]);
+    const validLat = parseLatitude(lat);
+    const validLng = parseLongitude(lng);
+    if (validLat !== null && validLng !== null) {
+      const newCoords: [number, number] = [Number(validLat.toFixed(6)), Number(validLng.toFixed(6))];
+      setSelectedCoords(newCoords);
+      reverseGeocode(newCoords[0], newCoords[1]);
+    }
   };
 
   const handleMarkerDragEnd = () => {
     const marker = markerRef.current;
     if (marker) {
       const pos = marker.getLatLng();
-      const newCoords: [number, number] = [Number(pos.lat.toFixed(6)), Number(pos.lng.toFixed(6))];
-      setSelectedCoords(newCoords);
-      reverseGeocode(newCoords[0], newCoords[1]);
+      const validLat = parseLatitude(pos.lat);
+      const validLng = parseLongitude(pos.lng);
+      if (validLat !== null && validLng !== null) {
+        const newCoords: [number, number] = [Number(validLat.toFixed(6)), Number(validLng.toFixed(6))];
+        setSelectedCoords(newCoords);
+        reverseGeocode(newCoords[0], newCoords[1]);
+      }
     }
   };
 
@@ -273,9 +275,9 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
   };
 
   const handleSelectSearchResult = (place: NominatimPlace) => {
-    const lat = parseFloat(place.lat);
-    const lon = parseFloat(place.lon);
-    if (!isNaN(lat) && !isNaN(lon)) {
+    const lat = parseLatitude(place.lat);
+    const lon = parseLongitude(place.lon);
+    if (lat !== null && lon !== null) {
       const newCoords: [number, number] = [Number(lat.toFixed(6)), Number(lon.toFixed(6))];
       setSelectedCoords(newCoords);
       setMapCenter(newCoords);
@@ -465,7 +467,7 @@ export const MapLocationPickerModal: React.FC<MapLocationPickerModalProps> = ({
             <div className="flex items-center gap-2">
               <span className="font-bold text-slate-700">Selected Coordinates:</span>
               <span className="font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 font-bold">
-                {selectedCoords[0].toFixed(6)}, {selectedCoords[1].toFixed(6)}
+                {formatLatitude(selectedCoords[0], 6)}, {formatLongitude(selectedCoords[1], 6)}
               </span>
               {isReverseGeocoding && (
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
